@@ -19,7 +19,7 @@ impl PhoneService {
         tracing::info!("[PhoneService] on_connected: {} from {}", identifier, host);
 
         // Try to fetch device info from atx-agent
-        let url = format!("http://{}:7912/info", host);
+        let url = format!("http://{}:9008/info", host);
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(5))
             .build()
@@ -31,7 +31,7 @@ impl PhoneService {
                     let mut data = serde_json::json!({
                         "udid": identifier,
                         "ip": host,
-                        "port": 7912,
+                        "port": 9008,
                         "present": true,
                         "ready": true,
                     });
@@ -81,7 +81,7 @@ impl PhoneService {
                     serde_json::json!({
                         "udid": identifier,
                         "ip": host,
-                        "port": 7912,
+                        "port": 9008,
                         "present": true,
                         "ready": false,
                     })
@@ -92,7 +92,7 @@ impl PhoneService {
                 serde_json::json!({
                     "udid": identifier,
                     "ip": host,
-                    "port": 7912,
+                    "port": 9008,
                     "present": true,
                     "ready": false,
                 })

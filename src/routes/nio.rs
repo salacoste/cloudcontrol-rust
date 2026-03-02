@@ -56,7 +56,7 @@ pub async fn nio_websocket(
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
-        let port = device.get("port").and_then(|v| v.as_i64()).unwrap_or(7912);
+        let port = device.get("port").and_then(|v| v.as_i64()).unwrap_or(9008);
         let client = Arc::new(AtxClient::new(&ip, port, &udid_clone));
 
         // Screenshot streaming state

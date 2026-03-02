@@ -113,6 +113,85 @@ impl Adb {
     pub fn is_usb_serial(serial: &str) -> bool {
         !serial.contains(':')
     }
+
+    /// Set up `adb -s <serial> forward tcp:0 tcp:<remote_port>` and return the assigned local port.
+    pub async fn forward(serial: &str, remote_port: u16) -> Result<u16, String> {
+        let output = Command::new("adb")
+            .args([
+                "-s",
+                serial,
+                "forward",
+                "tcp:0",
+                &format!("tcp:{}", remote_port),
+            ])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .await
+            .map_err(|e| format!("adb forward failed: {}", e))?;
+
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+
+        // adb forward tcp:0 returns the assigned port number on stdout
+        if let Ok(port) = stdout.parse::<u16>() {
+            return Ok(port);
+        }
+
+        // Some adb versions output port on stderr or don't output it at all.
+        // Try to parse from stderr.
+        if let Ok(port) = stderr.parse::<u16>() {
+            return Ok(port);
+        }
+
+        // Fallback: list forwards and find the one we just created
+        let list_output = Command::new("adb")
+            .args(["-s", serial, "forward", "--list"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .await
+            .map_err(|e| format!("adb forward --list failed: {}", e))?;
+
+        let list_stdout = String::from_utf8_lossy(&list_output.stdout);
+        let remote_target = format!("tcp:{}", remote_port);
+
+        // Find the last forward entry matching our remote port
+        for line in list_stdout.lines().rev() {
+            // Format: "serial tcp:LOCAL_PORT tcp:REMOTE_PORT"
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() >= 3 && parts[0] == serial && parts[2] == remote_target {
+                if let Some(port_str) = parts[1].strip_prefix("tcp:") {
+                    if let Ok(port) = port_str.parse::<u16>() {
+                        return Ok(port);
+                    }
+                }
+            }
+        }
+
+        Err(format!(
+            "Failed to determine forwarded port. stdout={}, stderr={}",
+            stdout, stderr
+        ))
+    }
+
+    /// Remove a port forwarding: `adb -s <serial> forward --remove tcp:<local_port>`.
+    pub async fn forward_remove(serial: &str, local_port: u16) -> Result<(), String> {
+        Command::new("adb")
+            .args([
+                "-s",
+                serial,
+                "forward",
+                "--remove",
+                &format!("tcp:{}", local_port),
+            ])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .await
+            .map_err(|e| format!("adb forward --remove failed: {}", e))?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]

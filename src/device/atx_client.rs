@@ -1,3 +1,4 @@
+use base64::Engine;
 use reqwest::Client;
 use serde_json::Value;
 use std::time::Duration;
@@ -40,8 +41,23 @@ impl AtxClient {
         }
     }
 
-    /// GET /screenshot/0 → returns JPEG bytes
+    /// Take screenshot via JSON-RPC `takeScreenshot` → returns JPEG bytes.
+    /// Compatible with both new uiautomator2 (port 9008) and old atx-agent (port 7912).
     pub async fn screenshot(&self) -> Result<Vec<u8>, String> {
+        // Try JSON-RPC takeScreenshot first (new uiautomator2 on port 9008)
+        let result = self
+            .jsonrpc("takeScreenshot", vec![serde_json::json!(1), serde_json::json!(80)])
+            .await;
+
+        if let Ok(Value::String(b64_data)) = result {
+            if !b64_data.is_empty() {
+                return base64::engine::general_purpose::STANDARD
+                    .decode(&b64_data)
+                    .map_err(|e| format!("Failed to decode screenshot base64: {}", e));
+            }
+        }
+
+        // Fallback: try GET /screenshot/0 (old atx-agent)
         let url = format!("{}/screenshot/0", self.base_url);
         let resp = self
             .client

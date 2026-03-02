@@ -51,19 +51,41 @@ impl DeviceDetector {
             model.replace(' ', "_")
         );
 
-        // Determine IP
-        let ip = if Adb::is_usb_serial(serial) {
-            // For USB devices, try to get WiFi IP
-            Adb::shell(serial, "ip route | grep 'src' | head -1 | awk '{print $NF}'")
-                .await
-                .unwrap_or_else(|_| "127.0.0.1".to_string())
+        // Determine IP and port for atx-agent connection
+        // New uiautomator2 uses port 9008, old atx-agent uses 7912
+        let device_port: u16 = 9008;
+
+        let (ip, agent_port): (String, i64) = if Adb::is_usb_serial(serial)
+            || serial.starts_with("emulator-")
+        {
+            // USB or emulator: use adb forward to reach device server
+            match Adb::forward(serial, device_port).await {
+                Ok(local_port) => {
+                    tracing::info!(
+                        "[Detector] ADB forward established: 127.0.0.1:{} -> {}:{}",
+                        local_port,
+                        serial,
+                        device_port
+                    );
+                    ("127.0.0.1".to_string(), local_port as i64)
+                }
+                Err(e) => {
+                    tracing::warn!("[Detector] ADB forward failed for {}: {}", serial, e);
+                    // Fallback: try to get WiFi IP
+                    let ip = Adb::shell(serial, "ip route | grep 'src' | head -1 | awk '{print $NF}'")
+                        .await
+                        .unwrap_or_else(|_| "127.0.0.1".to_string());
+                    (ip, device_port as i64)
+                }
+            }
         } else {
             // WiFi device: extract IP from serial (ip:port)
-            serial
+            let ip = serial
                 .split(':')
                 .next()
                 .unwrap_or("127.0.0.1")
-                .to_string()
+                .to_string();
+            (ip, device_port as i64)
         };
 
         let now = Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
@@ -73,7 +95,7 @@ impl DeviceDetector {
             "udid": udid,
             "serial": serial,
             "ip": ip.trim(),
-            "port": 7912,
+            "port": agent_port,
             "model": model.trim(),
             "brand": brand.trim(),
             "version": version.trim(),

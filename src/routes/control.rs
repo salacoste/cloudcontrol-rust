@@ -28,6 +28,31 @@ fn get_mock_screenshot() -> &'static str {
 
 // ─── Helper: get device + atx client ───
 
+async fn resolve_device_connection(device: &Value, ip: &str, port: i64) -> (String, i64) {
+    // If IP is valid and non-loopback, use it directly
+    if !ip.is_empty() && ip != "127.0.0.1" {
+        return (ip.to_string(), port);
+    }
+
+    // Already forwarded (ip=127.0.0.1 with a non-standard port) → use as-is
+    if ip == "127.0.0.1" && port != 9008 {
+        return (ip.to_string(), port);
+    }
+
+    // USB/emulator device with empty IP: try adb forward
+    let serial = device
+        .get("serial")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    if !serial.is_empty() {
+        if let Ok(local_port) = crate::device::adb::Adb::forward(serial, 9008).await {
+            return ("127.0.0.1".to_string(), local_port as i64);
+        }
+    }
+
+    (ip.to_string(), port)
+}
+
 async fn get_device_client(
     state: &AppState,
     udid: &str,
@@ -35,8 +60,9 @@ async fn get_device_client(
     // Try device info cache first
     if let Some(cached) = state.device_info_cache.get(udid).await {
         let ip = cached.get("ip").and_then(|v| v.as_str()).unwrap_or("");
-        let port = cached.get("port").and_then(|v| v.as_i64()).unwrap_or(7912);
-        let client = state.connection_pool.get_or_create(udid, ip, port).await;
+        let port = cached.get("port").and_then(|v| v.as_i64()).unwrap_or(9008);
+        let (final_ip, final_port) = resolve_device_connection(&cached, ip, port).await;
+        let client = state.connection_pool.get_or_create(udid, &final_ip, final_port).await;
         return Ok((cached, client));
     }
 
@@ -50,8 +76,9 @@ async fn get_device_client(
     state.device_info_cache.insert(udid.to_string(), device.clone()).await;
 
     let ip = device.get("ip").and_then(|v| v.as_str()).unwrap_or("");
-    let port = device.get("port").and_then(|v| v.as_i64()).unwrap_or(7912);
-    let client = state.connection_pool.get_or_create(udid, ip, port).await;
+    let port = device.get("port").and_then(|v| v.as_i64()).unwrap_or(9008);
+    let (final_ip, final_port) = resolve_device_connection(&device, ip, port).await;
+    let client = state.connection_pool.get_or_create(udid, &final_ip, final_port).await;
     Ok((device, client))
 }
 
@@ -88,7 +115,7 @@ pub async fn remote(
 
     let mut ctx = tera::Context::new();
     ctx.insert("IP", device.get("ip").and_then(|v| v.as_str()).unwrap_or(""));
-    ctx.insert("Port", &device.get("port").and_then(|v| v.as_i64()).unwrap_or(7912));
+    ctx.insert("Port", &device.get("port").and_then(|v| v.as_i64()).unwrap_or(9008));
     ctx.insert("Udid", &udid);
     ctx.insert("deviceInfo", &device);
     ctx.insert("device", &device.to_string());
@@ -127,20 +154,20 @@ pub async fn async_list_page(
                 "des": dev.get("ip").and_then(|v| v.as_str()).unwrap_or(""),
                 "width": display.get("width").and_then(|v| v.as_i64()).unwrap_or(1080),
                 "height": display.get("height").and_then(|v| v.as_i64()).unwrap_or(1920),
-                "port": dev.get("port").and_then(|v| v.as_i64()).unwrap_or(7912),
+                "port": dev.get("port").and_then(|v| v.as_i64()).unwrap_or(9008),
                 "udid": dev.get("udid").and_then(|v| v.as_str()).unwrap_or(""),
                 "model": dev.get("model").and_then(|v| v.as_str()).unwrap_or(""),
             }));
         }
     }
 
-    let device = first_device.unwrap_or(json!({"ip":"","port":7912,"display":{"width":1080,"height":1920},"udid":""}));
+    let device = first_device.unwrap_or(json!({"ip":"","port":9008,"display":{"width":1080,"height":1920},"udid":""}));
     let display = device.get("display").cloned().unwrap_or(json!({"width":1080,"height":1920}));
 
     let mut ctx = tera::Context::new();
     ctx.insert("list", &serde_json::to_string(&ip_list).unwrap_or_default());
     ctx.insert("IP", device.get("ip").and_then(|v| v.as_str()).unwrap_or(""));
-    ctx.insert("Port", &device.get("port").and_then(|v| v.as_i64()).unwrap_or(7912));
+    ctx.insert("Port", &device.get("port").and_then(|v| v.as_i64()).unwrap_or(9008));
     ctx.insert("Width", &display.get("width").and_then(|v| v.as_i64()).unwrap_or(1080));
     ctx.insert("Height", &display.get("height").and_then(|v| v.as_i64()).unwrap_or(1920));
     ctx.insert("Udid", device.get("udid").and_then(|v| v.as_str()).unwrap_or(""));
@@ -491,7 +518,7 @@ pub async fn inspector_hierarchy(
     };
 
     let ip = device.get("ip").and_then(|v| v.as_str()).unwrap_or("");
-    let port = device.get("port").and_then(|v| v.as_i64()).unwrap_or(7912);
+    let port = device.get("port").and_then(|v| v.as_i64()).unwrap_or(9008);
     let client = AtxClient::new(ip, port, &udid);
 
     match DeviceService::dump_hierarchy(&client).await {
@@ -590,7 +617,7 @@ pub async fn store_file_handler(
     };
 
     let ip = device.get("ip").and_then(|v| v.as_str()).unwrap_or("");
-    let port = device.get("port").and_then(|v| v.as_i64()).unwrap_or(7912);
+    let port = device.get("port").and_then(|v| v.as_i64()).unwrap_or(9008);
 
     let mut path = "/data/local/tmp/".to_string();
     let mut power = "755".to_string();
@@ -696,7 +723,7 @@ pub async fn upload_group(
 
     for dev in &devices {
         let ip = dev.get("ip").and_then(|v| v.as_str()).unwrap_or("");
-        let port = dev.get("port").and_then(|v| v.as_i64()).unwrap_or(7912);
+        let port = dev.get("port").and_then(|v| v.as_i64()).unwrap_or(9008);
         let dev_udid = dev.get("udid").and_then(|v| v.as_str()).unwrap_or("");
 
         let url = format!(
@@ -850,7 +877,7 @@ pub async fn shell(
     };
 
     let ip = device.get("ip").and_then(|v| v.as_str()).unwrap_or("");
-    let port = device.get("port").and_then(|v| v.as_i64()).unwrap_or(7912);
+    let port = device.get("port").and_then(|v| v.as_i64()).unwrap_or(9008);
     let client = AtxClient::new(ip, port, udid);
 
     let _ = client.shell_cmd(&command).await;
@@ -908,7 +935,7 @@ pub async fn wifi_connect(
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
     // Step 3: Get device info from atx-agent
-    let atx = AtxClient::from_url(&format!("http://{}:7912", ip), &address);
+    let atx = AtxClient::from_url(&format!("http://{}:9008", ip), &address);
     let info = match atx.device_info().await {
         Ok(i) => i,
         Err(e) => {
@@ -945,7 +972,7 @@ pub async fn wifi_connect(
         "udid": udid,
         "serial": address,
         "ip": ip,
-        "port": 7912,
+        "port": 9008,
         "present": true,
         "ready": true,
         "using": false,
