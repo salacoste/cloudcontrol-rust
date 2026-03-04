@@ -1,0 +1,46 @@
+{
+  "project_name": "cloudcontrol-rust",
+  "scan_date": "2025-03-05",
+  "mode": "initial_scan",
+  "scan_level": "standard",
+  "project_type": ["backend"],
+  "technology_stack": {
+    "language": "Rust",
+    "edition": "2021",
+    "framework": "actix-web 4.x",
+    "runtime": "tokio 1.x",
+    "database": "SQLite (sqlx 0.8)",
+    "template_engine": "tera 1.x"
+  },
+  "completed_steps": [
+    "discovery",
+    "architecture",
+    "data_models",
+    "api_endpoints",
+    "services",
+    "shared_code",
+    "configuration",
+    "tests",
+    "deployment"
+  ],
+  "generated_docs": [
+    "index.md",
+    "architecture.md",
+    "data-models.md",
+    "api-endpoints.md",
+    "services.md",
+    "shared-code.md",
+    "configuration.md",
+    "tests.md",
+    "deployment.md"
+  ],
+  "metrics": {
+    "source_files": 33,
+    "test_files": 5,
+    "total_tests": 90,
+    "api_endpoints": 25,
+    "websocket_endpoints": 3,
+    "data_models": 2
+  },
+  "status": "complete"
+}
