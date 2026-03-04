@@ -1,3 +1,4 @@
+use crate::device::adb::Adb;
 use crate::device::atx_client::AtxClient;
 use crate::services::device_service::DeviceService;
 use crate::state::AppState;
@@ -102,34 +103,77 @@ pub async fn nio_websocket(
                                     let client = client.clone();
                                     let mut session_clone = session.clone();
                                     let running = running.clone();
+                                    let serial = device
+                                        .get("serial")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("")
+                                        .to_string();
+                                    let is_usb = Adb::is_usb_serial(&serial);
 
                                     let handle = tokio::spawn(async move {
-                                        let interval =
+                                        let min_interval =
                                             Duration::from_millis(interval_ms.max(30));
+                                        let mut frame_count: u64 = 0;
+                                        let stream_start = std::time::Instant::now();
 
                                         while running.load(std::sync::atomic::Ordering::Relaxed) {
-                                            match DeviceService::screenshot_base64(
-                                                &client, 50, 1.0,
-                                            )
-                                            .await
-                                            {
-                                                Ok(b64) => {
-                                                    let msg = json!({
-                                                        "status": "ok",
-                                                        "type": "screenshot",
-                                                        "encoding": "base64",
-                                                        "data": b64,
-                                                        "timestamp": std::time::SystemTime::now()
-                                                            .duration_since(std::time::UNIX_EPOCH)
-                                                            .unwrap()
-                                                            .as_secs_f64(),
-                                                    });
+                                            let start = std::time::Instant::now();
+
+                                            // Primary: u2 JSON-RPC takeScreenshot (device-side scale+compress)
+                                            // Fallback: ADB screencap (slow, 1.3s per frame)
+                                            let result = client
+                                                .screenshot_scaled(0.5, 40)
+                                                .await
+                                                .or_else(|_| -> Result<Vec<u8>, String> {
+                                                    // Will try ADB fallback synchronously — NOT used inline,
+                                                    // schedule it as async below
+                                                    Err("u2 failed".into())
+                                                });
+
+                                            // If u2 failed, try ADB screencap as fallback
+                                            let result = match result {
+                                                Ok(bytes) => Ok(bytes),
+                                                Err(_) if is_usb && !serial.is_empty() => {
+                                                    tracing::warn!("[NIO] u2 failed, falling back to ADB screencap");
+                                                    DeviceService::screenshot_usb_jpeg(
+                                                        &serial, 40, 0.5,
+                                                    )
+                                                    .await
+                                                }
+                                                Err(e) => Err(e),
+                                            };
+
+                                            match result {
+                                                Ok(jpeg_bytes) => {
+                                                    let t_capture = start.elapsed();
+                                                    let jpeg_size = jpeg_bytes.len();
+
+                                                    let t_send_start = std::time::Instant::now();
+                                                    // Send as binary WebSocket frame
                                                     if session_clone
-                                                        .text(serde_json::to_string(&msg).unwrap())
+                                                        .binary(jpeg_bytes)
                                                         .await
                                                         .is_err()
                                                     {
                                                         break;
+                                                    }
+                                                    let t_send = t_send_start.elapsed();
+
+                                                    frame_count += 1;
+                                                    let total = start.elapsed();
+                                                    let avg_fps = frame_count as f64 / stream_start.elapsed().as_secs_f64();
+
+                                                    // Log every 20 frames
+                                                    if frame_count % 20 == 0 {
+                                                        tracing::info!(
+                                                            "[NIO] frame#{} | capture={:.0}ms | ws_send={:.0}ms | total={:.0}ms | {}KB | avg {:.1}fps",
+                                                            frame_count,
+                                                            t_capture.as_secs_f64() * 1000.0,
+                                                            t_send.as_secs_f64() * 1000.0,
+                                                            total.as_secs_f64() * 1000.0,
+                                                            jpeg_size / 1024,
+                                                            avg_fps,
+                                                        );
                                                     }
                                                 }
                                                 Err(e) => {
@@ -139,9 +183,15 @@ pub async fn nio_websocket(
                                                     );
                                                     tokio::time::sleep(Duration::from_millis(500))
                                                         .await;
+                                                    continue;
                                                 }
                                             }
-                                            tokio::time::sleep(interval).await;
+
+                                            // Smart interval: only sleep remaining time
+                                            let elapsed = start.elapsed();
+                                            if elapsed < min_interval {
+                                                tokio::time::sleep(min_interval - elapsed).await;
+                                            }
                                         }
                                     });
 
@@ -177,17 +227,27 @@ pub async fn nio_websocket(
                                 .and_then(|v| v.as_u64())
                                 .unwrap_or(60) as u8;
 
-                            match DeviceService::screenshot_base64(&client, quality, 1.0).await {
-                                Ok(b64) => json!({
-                                    "status": "ok",
-                                    "type": "screenshot",
-                                    "encoding": "base64",
-                                    "data": b64,
-                                    "timestamp": std::time::SystemTime::now()
-                                        .duration_since(std::time::UNIX_EPOCH)
-                                        .unwrap()
-                                        .as_secs_f64(),
-                                }),
+                            // Primary: u2 JSON-RPC (device-side compress)
+                            // Fallback: ADB screencap
+                            let serial = device
+                                .get("serial")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("");
+                            let result = client.screenshot_scaled(0.5, quality).await
+                                .or_else(|_| -> Result<Vec<u8>, String> { Err("u2 failed".into()) });
+                            let result = match result {
+                                Ok(bytes) => Ok(bytes),
+                                Err(_) if Adb::is_usb_serial(serial) && !serial.is_empty() => {
+                                    DeviceService::screenshot_usb_jpeg(serial, quality, 0.5).await
+                                }
+                                Err(e) => Err(e),
+                            };
+
+                            match result {
+                                Ok(jpeg_bytes) => {
+                                    let _ = session.binary(jpeg_bytes).await;
+                                    continue;
+                                }
                                 Err(e) => json!({"status": "error", "message": e}),
                             }
                         }

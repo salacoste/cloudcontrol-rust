@@ -512,27 +512,65 @@ window.app = new Vue({
       var self = this;
       var canvas = document.getElementById('bgCanvas');
       var ctx = canvas.getContext('2d');
-      var imagePool = new ImagePool(100);
-      var BLANK_IMG = 'data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==';
+      var lastWidth = 0, lastHeight = 0;
+      var nioFrameCount = 0;
+      var nioStartTime = Date.now();
+      var nioLastLogTime = Date.now();
 
-      // 监听截图事件
+      // 监听截图事件 — binary blob 直接到 canvas, 零 base64 开销
       self.nioChannel.on('screenshot', function(msg) {
         if (msg.status !== 'ok') return;
+        var t0 = performance.now();
 
-        var blob = b64toBlob(msg.data, 'image/jpeg');
-        var img = imagePool.next();
-        img.onload = function() {
-          canvas.width = img.width;
-          canvas.height = img.height;
-          ctx.drawImage(img, 0, 0, img.width, img.height);
-          self.resizeScreen(img);
-          img.onload = img.onerror = null;
-          img.src = BLANK_IMG;
-          URL.revokeObjectURL(url);
-          window.app.loading = false;
-        };
-        var url = URL.createObjectURL(blob);
-        img.src = url;
+        // Binary blob (from binary WebSocket frame) or base64 fallback
+        var source = msg.blob || null;
+        var isBinary = !!source;
+        if (!source && msg.data) {
+          source = b64toBlob(msg.data, 'image/jpeg');
+        }
+        if (!source) return;
+
+        var blobSize = source.size || 0;
+
+        // createImageBitmap 在后台线程解码，不阻塞主线程
+        createImageBitmap(source).then(function(bitmap) {
+          var t1 = performance.now();
+          // 在下一个 vsync 渲染
+          requestAnimationFrame(function() {
+            // 只在尺寸变化时更新 canvas
+            if (bitmap.width !== lastWidth || bitmap.height !== lastHeight) {
+              canvas.width = bitmap.width;
+              canvas.height = bitmap.height;
+              lastWidth = bitmap.width;
+              lastHeight = bitmap.height;
+              self.resizeScreen(bitmap);
+            }
+
+            ctx.drawImage(bitmap, 0, 0);
+            bitmap.close();
+            window.app.loading = false;
+
+            var t2 = performance.now();
+            nioFrameCount++;
+
+            // 每 20 帧输出一次日志
+            var now = Date.now();
+            if (now - nioLastLogTime >= 2000) {
+              var elapsed = (now - nioStartTime) / 1000;
+              var avgFps = nioFrameCount / elapsed;
+              console.log(
+                '[NIO] frame#' + nioFrameCount +
+                ' | ' + (isBinary ? 'binary' : 'base64') +
+                ' | decode=' + (t1 - t0).toFixed(0) + 'ms' +
+                ' | render=' + (t2 - t1).toFixed(0) + 'ms' +
+                ' | total=' + (t2 - t0).toFixed(0) + 'ms' +
+                ' | ' + Math.round(blobSize / 1024) + 'KB' +
+                ' | avg ' + avgFps.toFixed(1) + 'fps'
+              );
+              nioLastLogTime = now;
+            }
+          });
+        });
       });
 
       // 订阅截图流，50ms 间隔
@@ -1823,199 +1861,109 @@ window.app = new Vue({
     },
     openScreenStream: function () {
       var self = this;
-      var BLANK_IMG =
-        'data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw=='
-      var canvas = document.getElementById('bgCanvas')
+      var canvas = document.getElementById('bgCanvas');
       var ctx = canvas.getContext('2d');
       var running = true;
-
-      // ========== 双缓冲技术 ==========
-      // 创建两个缓冲区，轮流使用
-      var buffers = [
-        { img: new Image(), ready: false, url: null },
-        { img: new Image(), ready: false, url: null }
-      ];
-      var frontBuffer = 0;  // 当前显示的缓冲区
-      var backBuffer = 1;   // 正在加载的缓冲区
-      var fetching = false; // 是否正在获取截图
-      var pendingFetch = false; // 是否有待处理的获取请求
+      var lastWidth = 0, lastHeight = 0;
+      var httpFrameCount = 0;
+      var httpStartTime = Date.now();
+      var httpLastLogTime = Date.now();
 
       self.screenWS = { close: function() { running = false; } };
 
-      // 清理缓冲区
-      function cleanupBuffer(buf) {
-        if (buf.url) {
-          URL.revokeObjectURL(buf.url);
-          buf.url = null;
-        }
-        buf.ready = false;
+      // Raw JPEG endpoint — no JSON parse, no base64 decode overhead
+      var screenshotUrl = '/inspector/' + self.deviceUdid + '/screenshot/img?q=60&s=0.6';
+
+      // ═══════════════════════════════════════════════
+      //  流水线双缓冲 (Pipeline Double Buffering)
+      // ═══════════════════════════════════════════════
+
+      // 获取一帧：返回 Promise<{bitmap, latency, fetchTime, decodeTime}>
+      function fetchFrame() {
+        var t0 = performance.now();
+        var t_fetch_done;
+        return fetch(screenshotUrl)
+          .then(function(resp) {
+            if (!resp.ok) throw new Error('HTTP ' + resp.status);
+            return resp.blob();
+          })
+          .then(function(blob) {
+            t_fetch_done = performance.now();
+            return createImageBitmap(blob).then(function(bitmap) {
+              var t_decode_done = performance.now();
+              return {
+                bitmap: bitmap,
+                latency: t_decode_done - t0,
+                fetchTime: t_fetch_done - t0,
+                decodeTime: t_decode_done - t_fetch_done,
+                size: blob.size
+              };
+            });
+          });
       }
 
-      // 显示当前帧并立即开始加载下一帧
-      function displayAndFetch() {
+      // 流水线核心：处理当前帧，同时启动下一帧获取
+      function pipeline(frameProm) {
         if (!running) return;
 
-        var front = buffers[frontBuffer];
-        if (front.ready) {
-          // 绘制当前帧
-          canvas.width = front.img.width;
-          canvas.height = front.img.height;
-          ctx.drawImage(front.img, 0, 0, front.img.width, front.img.height);
-          self.resizeScreen(front.img);
-          window.app.loading = false;
+        frameProm.then(function(frame) {
+          if (!running) { frame.bitmap.close(); return; }
 
-          // 清理已显示的缓冲区，准备下次使用
-          cleanupBuffer(front);
+          // ① 立即启动下一帧获取（不等当前帧渲染完）
+          var nextProm = fetchFrame();
 
-          // 交换缓冲区
-          frontBuffer = backBuffer;
-          backBuffer = (backBuffer + 1) % 2;
-        }
+          // ② 在下一个 vsync 时渲染当前帧
+          requestAnimationFrame(function() {
+            if (!running) { frame.bitmap.close(); return; }
 
-        // 检查后台缓冲区是否已准备好
-        var back = buffers[backBuffer];
-        if (back.ready) {
-          // 后台缓冲区已准备好，立即显示
-          requestAnimationFrame(displayAndFetch);
-        } else if (!fetching) {
-          // 开始获取下一帧
-          fetchNextFrame();
-        }
-      }
-
-      // 获取下一帧到后台缓冲区
-      function fetchNextFrame() {
-        if (!running || fetching) {
-          pendingFetch = true;
-          return;
-        }
-
-        fetching = true;
-        pendingFetch = false;
-        var fetchStartTime = Date.now();
-
-        $.getJSON('/inspector/' + self.deviceUdid + '/screenshot')
-          .done(function(ret) {
-            if (!running) {
-              fetching = false;
-              return;
+            // 只在尺寸变化时更新 canvas（避免 layout reflow）
+            if (frame.bitmap.width !== lastWidth || frame.bitmap.height !== lastHeight) {
+              canvas.width = frame.bitmap.width;
+              canvas.height = frame.bitmap.height;
+              lastWidth = frame.bitmap.width;
+              lastHeight = frame.bitmap.height;
+              self.resizeScreen(frame.bitmap);
             }
 
-            // 记录截图延迟
-            self.updateScreenshotLatency(Date.now() - fetchStartTime);
+            // 绘制帧
+            ctx.drawImage(frame.bitmap, 0, 0);
+            frame.bitmap.close(); // 释放 GPU 内存
 
-            var back = buffers[backBuffer];
-            var blob = b64toBlob(ret.data, 'image/' + ret.type);
-            back.url = URL.createObjectURL(blob);
+            window.app.loading = false;
+            self.updateScreenshotLatency(Math.round(frame.latency));
 
-            back.img.onload = function() {
-              back.ready = true;
-              fetching = false;
-
-              // 帧已准备好，触发显示
-              requestAnimationFrame(displayAndFetch);
-
-              // 如果有待处理的请求，立即开始下一次获取
-              if (pendingFetch && running) {
-                fetchNextFrame();
-              }
-            };
-
-            back.img.onerror = function() {
-              cleanupBuffer(back);
-              fetching = false;
-              if (running) setTimeout(fetchNextFrame, 50);
-            };
-
-            back.img.src = back.url;
-          })
-          .fail(function() {
-            fetching = false;
-            if (running) setTimeout(fetchNextFrame, 100);
+            httpFrameCount++;
+            var now = Date.now();
+            if (now - httpLastLogTime >= 2000) {
+              var elapsed = (now - httpStartTime) / 1000;
+              var avgFps = httpFrameCount / elapsed;
+              console.log(
+                '[HTTP] frame#' + httpFrameCount +
+                ' | fetch=' + frame.fetchTime.toFixed(0) + 'ms' +
+                ' | decode=' + frame.decodeTime.toFixed(0) + 'ms' +
+                ' | total=' + frame.latency.toFixed(0) + 'ms' +
+                ' | ' + Math.round(frame.size / 1024) + 'KB' +
+                ' | avg ' + avgFps.toFixed(1) + 'fps'
+              );
+              httpLastLogTime = now;
+            }
           });
+
+          // ③ 继续流水线（下一帧到达后重复此过程）
+          pipeline(nextProm);
+
+        }).catch(function(err) {
+          // 网络错误，短暂等待后重试
+          if (running) {
+            console.warn('[HTTP] Screenshot error:', err.message);
+            setTimeout(function() { pipeline(fetchFrame()); }, 100);
+          }
+        });
       }
 
-      // 预加载队列 - 始终保持2帧在加载中
-      var preloadQueue = [];
-      var maxPreload = 2;
-
-      function preloadFrame() {
-        if (!running || preloadQueue.length >= maxPreload) return;
-
-        var preloadItem = { img: new Image(), url: null, ready: false };
-        preloadQueue.push(preloadItem);
-
-        $.getJSON('/inspector/' + self.deviceUdid + '/screenshot')
-          .done(function(ret) {
-            if (!running) return;
-
-            var blob = b64toBlob(ret.data, 'image/' + ret.type);
-            preloadItem.url = URL.createObjectURL(blob);
-
-            preloadItem.img.onload = function() {
-              preloadItem.ready = true;
-              // 尝试显示
-              tryDisplayNext();
-              // 继续预加载
-              preloadFrame();
-            };
-
-            preloadItem.img.onerror = function() {
-              // 移除失败的项
-              var idx = preloadQueue.indexOf(preloadItem);
-              if (idx > -1) preloadQueue.splice(idx, 1);
-              if (preloadItem.url) URL.revokeObjectURL(preloadItem.url);
-              // 重新预加载
-              if (running) setTimeout(preloadFrame, 50);
-            };
-
-            preloadItem.img.src = preloadItem.url;
-          })
-          .fail(function() {
-            var idx = preloadQueue.indexOf(preloadItem);
-            if (idx > -1) preloadQueue.splice(idx, 1);
-            if (running) setTimeout(preloadFrame, 100);
-          });
-      }
-
-      // 尝试显示下一帧
-      function tryDisplayNext() {
-        if (!running || preloadQueue.length === 0) return;
-
-        var item = preloadQueue[0];
-        if (!item.ready) return;
-
-        // 移除并显示
-        preloadQueue.shift();
-
-        // 绘制帧
-        canvas.width = item.img.width;
-        canvas.height = item.img.height;
-        ctx.drawImage(item.img, 0, 0, item.img.width, item.img.height);
-        self.resizeScreen(item.img);
-        window.app.loading = false;
-
-        // 清理
-        if (item.url) URL.revokeObjectURL(item.url);
-        item.img = null;
-
-        // 继续预加载保持队列满
-        preloadFrame();
-
-        // 使用 requestAnimationFrame 平滑显示
-        requestAnimationFrame(tryDisplayNext);
-      }
-
-      // 启动双缓冲
-      function startDoubleBuffering() {
-        // 同时启动多个预加载
-        for (var i = 0; i < maxPreload; i++) {
-          preloadFrame();
-        }
-      }
-
-      startDoubleBuffering();
-      console.log('[双缓冲] 屏幕流已启动 (预加载队列=' + maxPreload + ')');
+      // 启动流水线
+      pipeline(fetchFrame());
+      console.log('[Screenshot] Pipeline double-buffer started (raw JPEG + createImageBitmap)');
     },
     enableTouch: function () {
       /**

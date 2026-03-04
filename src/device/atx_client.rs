@@ -53,8 +53,10 @@ impl AtxClient {
 
         if let Ok(Value::String(b64_data)) = result {
             if !b64_data.is_empty() {
+                // u2 returns MIME-style base64 with \n line breaks — strip them
+                let b64_clean = b64_data.replace('\n', "").replace('\r', "");
                 return base64::engine::general_purpose::STANDARD
-                    .decode(&b64_data)
+                    .decode(&b64_clean)
                     .map_err(|e| format!("Failed to decode screenshot base64: {}", e));
             }
         }
@@ -75,6 +77,65 @@ impl AtxClient {
             .map_err(|e| format!("Failed to read screenshot bytes: {}", e))?;
 
         Ok(bytes.to_vec())
+    }
+
+    /// Take screenshot with custom scale and quality — device does all processing.
+    /// Params: scale (0.0-1.0), quality (0-100).
+    /// Returns raw JPEG bytes (base64-decoded from u2 response).
+    /// This is the FASTEST path: no server-side PNG decode / resize / JPEG encode.
+    pub async fn screenshot_scaled(&self, scale: f64, quality: u8) -> Result<Vec<u8>, String> {
+        let t0 = std::time::Instant::now();
+
+        let result = self
+            .jsonrpc(
+                "takeScreenshot",
+                vec![serde_json::json!(scale), serde_json::json!(quality)],
+            )
+            .await;
+
+        let t_rpc = t0.elapsed();
+
+        if let Ok(Value::String(b64_data)) = result {
+            if !b64_data.is_empty() {
+                let t1 = std::time::Instant::now();
+                // u2 returns MIME-style base64 with \n line breaks — strip them
+                let b64_clean = b64_data.replace('\n', "").replace('\r', "");
+                let bytes = base64::engine::general_purpose::STANDARD
+                    .decode(&b64_clean)
+                    .map_err(|e| format!("Failed to decode screenshot base64: {}", e))?;
+                let t_decode = t1.elapsed();
+
+                tracing::info!(
+                    "[Screenshot] u2 s={:.1} q={} | rpc={:.0}ms | b64_decode={:.0}ms ({}KB b64→{}KB jpg) | total={:.0}ms",
+                    scale, quality,
+                    t_rpc.as_secs_f64() * 1000.0,
+                    t_decode.as_secs_f64() * 1000.0,
+                    b64_data.len() / 1024,
+                    bytes.len() / 1024,
+                    t0.elapsed().as_secs_f64() * 1000.0,
+                );
+
+                return Ok(bytes);
+            }
+        }
+
+        Err("takeScreenshot returned no data".to_string())
+    }
+
+    /// Take screenshot and return base64 string directly from u2 server.
+    /// Avoids the decode→recompress→re-encode cycle — much faster for streaming.
+    pub async fn screenshot_base64_direct(&self) -> Result<String, String> {
+        let result = self
+            .jsonrpc("takeScreenshot", vec![serde_json::json!(1), serde_json::json!(80)])
+            .await;
+
+        if let Ok(Value::String(b64_data)) = result {
+            if !b64_data.is_empty() {
+                return Ok(b64_data);
+            }
+        }
+
+        Err("takeScreenshot returned no data".to_string())
     }
 
     /// JSON-RPC call helper to POST /jsonrpc/0

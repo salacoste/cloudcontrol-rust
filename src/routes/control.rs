@@ -306,6 +306,31 @@ pub async fn inspector_screenshot(
         .max(0.25)
         .min(1.0);
 
+    let serial = device.get("serial").and_then(|v| v.as_str()).unwrap_or("");
+    let is_usb = Adb::is_usb_serial(serial);
+
+    // Primary: u2 JSON-RPC takeScreenshot with device-side scale+compress
+    if let Ok(jpeg_bytes) = client.screenshot_scaled(scale, quality).await {
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&jpeg_bytes);
+        return HttpResponse::Ok().json(json!({
+            "type": "jpeg",
+            "encoding": "base64",
+            "data": b64,
+        }));
+    }
+
+    // Fallback 1: USB ADB screencap
+    if is_usb && !serial.is_empty() {
+        if let Ok(b64) = DeviceService::screenshot_usb_base64(serial, quality, scale).await {
+            return HttpResponse::Ok().json(json!({
+                "type": "jpeg",
+                "encoding": "base64",
+                "data": b64,
+            }));
+        }
+    }
+
+    // Fallback 2: u2 full screenshot + server-side resize
     match DeviceService::screenshot_base64(&client, quality, scale).await {
         Ok(b64) => HttpResponse::Ok().json(json!({
             "type": "jpeg",
@@ -313,9 +338,8 @@ pub async fn inspector_screenshot(
             "data": b64,
         })),
         Err(e) => {
-            // Fallback: ADB screencap
-            let serial = device.get("serial").and_then(|v| v.as_str()).unwrap_or("");
-            if !serial.is_empty() {
+            // Final fallback: ADB screencap
+            if !serial.is_empty() && !is_usb {
                 if let Ok(png_bytes) = Adb::screencap(serial).await {
                     if let Ok(b64) = DeviceService::encode_screenshot(&png_bytes, quality, scale) {
                         return HttpResponse::Ok().json(json!({
@@ -385,12 +409,45 @@ pub async fn inspector_screenshot_img(
 
     let result = async {
         let (device, client) = get_device_client(&state, &udid).await?;
+        let serial = device.get("serial").and_then(|v| v.as_str()).unwrap_or("");
+        let is_usb = Adb::is_usb_serial(serial);
+        let t0 = std::time::Instant::now();
+
+        // Primary: u2 JSON-RPC takeScreenshot (device-side scale+compress, fastest)
+        if let Ok(jpeg_bytes) = client.screenshot_scaled(scale, quality).await {
+            tracing::info!(
+                "[HTTP] /screenshot/img u2-scaled total={:.0}ms | {}KB",
+                t0.elapsed().as_secs_f64() * 1000.0,
+                jpeg_bytes.len() / 1024,
+            );
+            return Ok(jpeg_bytes);
+        }
+
+        // Fallback 1: USB ADB screencap
+        if is_usb && !serial.is_empty() {
+            if let Ok(jpeg_bytes) = DeviceService::screenshot_usb_jpeg(serial, quality, scale).await {
+                tracing::info!(
+                    "[HTTP] /screenshot/img ADB-fallback total={:.0}ms | {}KB",
+                    t0.elapsed().as_secs_f64() * 1000.0,
+                    jpeg_bytes.len() / 1024,
+                );
+                return Ok(jpeg_bytes);
+            }
+        }
+
+        // Fallback 2: u2 full screenshot + server-side resize
         match DeviceService::screenshot_jpeg(&client, quality, scale).await {
-            Ok(bytes) => Ok(bytes),
+            Ok(bytes) => {
+                tracing::info!(
+                    "[HTTP] /screenshot/img u2-resize total={:.0}ms | {}KB",
+                    t0.elapsed().as_secs_f64() * 1000.0,
+                    bytes.len() / 1024,
+                );
+                Ok(bytes)
+            }
             Err(_) => {
-                // Fallback: ADB screencap
-                let serial = device.get("serial").and_then(|v| v.as_str()).unwrap_or("");
-                if !serial.is_empty() {
+                // Final fallback: ADB screencap
+                if !serial.is_empty() && !is_usb {
                     if let Ok(png_bytes) = Adb::screencap(serial).await {
                         if let Ok(jpeg_bytes) = DeviceService::raw_screenshot_to_jpeg(&png_bytes, quality, scale) {
                             return Ok(jpeg_bytes);

@@ -48,6 +48,8 @@ class NIOChannel {
             console.log('[NIO] 正在连接:', url);
 
             this.ws = new WebSocket(url);
+            // Receive binary frames as Blob for zero-copy screenshot rendering
+            this.ws.binaryType = 'blob';
 
             this.ws.onopen = () => {
                 console.log('[NIO] 连接成功');
@@ -76,7 +78,12 @@ class NIOChannel {
             };
 
             this.ws.onmessage = (event) => {
-                this._handleMessage(event.data);
+                if (event.data instanceof Blob) {
+                    // Binary frame = screenshot JPEG
+                    this._emit('screenshot', { status: 'ok', blob: event.data });
+                } else {
+                    this._handleMessage(event.data);
+                }
             };
         });
     }
@@ -313,31 +320,40 @@ class NIOScreenController {
     }
 
     /**
-     * 处理截图
+     * 处理截图 — 支持二进制 Blob（新）和 base64 JSON（兼容）
      */
     _onScreenshot(msg) {
         if (!this.running || msg.status !== 'ok') return;
 
-        const img = new Image();
-        img.onload = () => {
-            // 调整 canvas 大小
-            if (this.canvas.width !== img.width || this.canvas.height !== img.height) {
-                this.canvas.width = img.width;
-                this.canvas.height = img.height;
-            }
-            this.ctx.drawImage(img, 0, 0);
-            this.lastFrame = Date.now();
+        // Binary blob path (zero-copy, no base64 decode)
+        var source = msg.blob || null;
+        if (!source && msg.data) {
+            // Legacy base64 fallback
+            source = b64toBlob(msg.data, 'image/jpeg');
+        }
+        if (!source) return;
 
-            // 计算 FPS
-            this.frameCount++;
-            const now = Date.now();
-            if (now - this.lastFpsTime >= 1000) {
-                this.fps = this.frameCount;
-                this.frameCount = 0;
-                this.lastFpsTime = now;
-            }
-        };
-        img.src = 'data:image/jpeg;base64,' + msg.data;
+        var self = this;
+        createImageBitmap(source).then(function(bitmap) {
+            requestAnimationFrame(function() {
+                if (self.canvas.width !== bitmap.width || self.canvas.height !== bitmap.height) {
+                    self.canvas.width = bitmap.width;
+                    self.canvas.height = bitmap.height;
+                }
+                self.ctx.drawImage(bitmap, 0, 0);
+                bitmap.close();
+                self.lastFrame = Date.now();
+
+                // 计算 FPS
+                self.frameCount++;
+                var now = Date.now();
+                if (now - self.lastFpsTime >= 1000) {
+                    self.fps = self.frameCount;
+                    self.frameCount = 0;
+                    self.lastFpsTime = now;
+                }
+            });
+        });
     }
 
     /**
