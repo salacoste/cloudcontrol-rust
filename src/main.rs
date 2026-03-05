@@ -77,6 +77,11 @@ async fn main() -> std::io::Result<()> {
     detector.start().await;
     tracing::info!("USB device auto-detection started");
 
+    // ── Start WiFi discovery ──
+    let wifi_discovery = services::wifi_discovery::WifiDiscovery::new(phone_service.clone());
+    wifi_discovery.start().await;
+    tracing::info!("WiFi device auto-discovery started");
+
     // ── Start HTTP server ──
     tracing::info!("Starting server on http://0.0.0.0:{}", port);
 
