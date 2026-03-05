@@ -1,5 +1,5 @@
 ---
-stepsCompleted: ['step-01-init', 'step-02-discovery', 'step-02b-vision', 'step-02c-executive-summary', 'step-03-success', 'step-04-journeys', 'step-05-domain', 'step-06-innovation', 'step-07-project-type', 'step-08-scoping', 'step-09-functional', 'step-10-nonfunctional', 'step-11-polish']
+stepsCompleted: ['step-01-init', 'step-02-discovery', 'step-02b-vision', 'step-02c-executive-summary', 'step-03-success', 'step-04-journeys', 'step-05-domain', 'step-06-innovation', 'step-07-project-type', 'step-08-scoping', 'step-09-functional', 'step-10-nonfunctional', 'step-11-polish', 'step-e-01-discovery', 'step-e-02-review', 'step-e-03-edit']
 inputDocuments:
   - docs/index.md
   - docs/architecture.md
@@ -408,4 +408,34 @@ cloudcontrol-rust is a dual-nature application:
 | NFR16 | ADB command execution | <1s for standard commands |
 | NFR17 | scrcpy video stream latency | <100ms |
 | NFR18 | REST API compatibility | OpenAPI 3.0 spec compliant |
+
+**NFR19: Accessibility Compliance**
+
+| Requirement | Target |
+|------------|--------|
+| WCAG 2.1 Level A | Desktop web application meets WCAG 2.1 A requirements |
+| Keyboard navigation | All actions accessible via keyboard |
+| Screen reader compatibility | ARIA labels and semantic HTML |
+| Color contrast | 4.5:1 ratio minimum |
+| Non-text alternatives | Alt text for icons and images |
+| Resizable layouts | 200% zoom without horizontal scrolling |
+
+**NFR20: API Error Response Standardization**
+
+All API endpoints return standardized error responses:
+
+| Error Code | HTTP Status | Description |
+|------------|-------------|-------------|
+| `ERR_DEVICE_NOT_FOUND` | 404 | Device UDID not in system |
+| `ERR_DEVICE_DISCONNECTED` | 503 | Device exists but connection lost |
+| `ERR_INVALID_REQUEST` | 400 | Malformed request body/parameters |
+| `ERR_OPERATION_FAILED` | 500 | Device operation failed |
+
+**NFR21: API Versioning Strategy**
+
+- URL-based versioning: `/api/v1/...` endpoints
+- Backward compatibility via version in URL
+- Breaking changes require major version bump
+- Current version: v1 (MVP)
+- Future versions: v2 (Growth), v3 (Enterprise)
 
