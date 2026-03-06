@@ -1,4 +1,4 @@
-use serde_json::{Map, Value};
+use serde_json::{json, Map, Value};
 use sqlx::sqlite::{SqlitePool, SqlitePoolOptions, SqliteRow};
 use sqlx::{Column, Row};
 use std::collections::HashMap;
@@ -188,6 +188,28 @@ impl Database {
             .execute(&self.pool)
             .await?;
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_files_group ON installed_file(group_name)")
+            .execute(&self.pool)
+            .await?;
+
+        // Connection history table for tracking device connections
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS connection_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                udid TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                FOREIGN KEY (udid) REFERENCES devices(udid)
+            )
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_history_udid ON connection_history(udid)")
+            .execute(&self.pool)
+            .await?;
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_history_timestamp ON connection_history(timestamp)")
             .execute(&self.pool)
             .await?;
 
@@ -619,6 +641,238 @@ impl Database {
             .await?;
         let count: i64 = row.try_get("cnt").unwrap_or(0);
         Ok(count)
+    }
+
+    // ─── Connection History Operations ───
+
+    /// Record a connection event (connect or disconnect) for a device.
+    pub async fn record_connection_event(
+        &self,
+        udid: &str,
+        event_type: &str,
+        timestamp: &str,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "INSERT INTO connection_history (udid, event_type, timestamp) VALUES (?1, ?2, ?3)"
+        )
+        .bind(udid)
+        .bind(event_type)
+        .bind(timestamp)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Get connection history for a device, ordered by timestamp descending.
+    pub async fn get_connection_history(&self, udid: &str, limit: i64) -> Result<Vec<Value>, sqlx::Error> {
+        let rows = sqlx::query(
+            "SELECT event_type, timestamp FROM connection_history WHERE udid = ?1 ORDER BY timestamp DESC LIMIT ?2"
+        )
+        .bind(udid)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let events: Vec<Value> = rows
+            .iter()
+            .map(|row| {
+                use sqlx::Row;
+                let event_type: String = row.get("event_type");
+                let timestamp: String = row.get("timestamp");
+                json!({
+                    "event_type": event_type,
+                    "timestamp": timestamp
+                })
+            })
+            .collect();
+
+        Ok(events)
+    }
+
+    /// Get connection history with calculated session durations.
+    /// Returns events with session_duration_seconds for disconnect events.
+    pub async fn get_connection_history_with_durations(&self, udid: &str, limit: i64) -> Result<Vec<Value>, sqlx::Error> {
+        // Get events ordered by timestamp ascending for duration calculation
+        let rows = sqlx::query(
+            "SELECT event_type, timestamp FROM connection_history WHERE udid = ?1 ORDER BY timestamp ASC"
+        )
+        .bind(udid)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let events: Vec<(String, String)> = rows
+            .iter()
+            .map(|row| {
+                use sqlx::Row;
+                let event_type: String = row.get("event_type");
+                let timestamp: String = row.get("timestamp");
+                (event_type, timestamp)
+            })
+            .collect();
+
+        // Calculate session durations
+        let mut result: Vec<Value> = Vec::new();
+        for (i, (event_type, timestamp)) in events.iter().enumerate() {
+            let duration: Option<u64> = if event_type == "disconnect" && i > 0 {
+                // Find the preceding connect event
+                let mut found_duration: Option<u64> = None;
+                for j in (0..i).rev() {
+                    if events[j].0 == "connect" {
+                        // Calculate duration between connect and disconnect
+                        if let (Ok(connect_time), Ok(disconnect_time)) = (
+                            chrono::DateTime::parse_from_rfc3339(&events[j].1),
+                            chrono::DateTime::parse_from_rfc3339(timestamp),
+                        ) {
+                            let secs = (disconnect_time - connect_time).num_seconds();
+                            found_duration = Some(secs.max(0) as u64);
+                            break;
+                        }
+                    }
+                }
+                found_duration
+            } else {
+                None
+            };
+
+            result.push(json!({
+                "event_type": event_type,
+                "timestamp": timestamp,
+                "session_duration_seconds": duration
+            }));
+        }
+
+        // Reverse for most recent first
+        result.reverse();
+
+        // Apply limit
+        if result.len() > limit as usize {
+            result.truncate(limit as usize);
+        }
+
+        Ok(result)
+    }
+
+    /// Calculate uptime statistics for a device.
+    /// Returns uptime percentages and total connected/disconnected time.
+    pub async fn get_connection_stats(&self, udid: &str) -> Result<Value, sqlx::Error> {
+        let now = chrono::Utc::now();
+
+        // Get all events for this device
+        let rows = sqlx::query(
+            "SELECT event_type, timestamp FROM connection_history WHERE udid = ?1 ORDER BY timestamp ASC"
+        )
+        .bind(udid)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let events: Vec<(String, String)> = rows
+            .iter()
+            .map(|row| {
+                use sqlx::Row;
+                let event_type: String = row.get("event_type");
+                let timestamp: String = row.get("timestamp");
+                (event_type, timestamp)
+            })
+            .collect();
+
+        // Calculate total connected time and uptime percentages
+        let mut total_connected_seconds: i64 = 0;
+        let mut connected_24h_seconds: i64 = 0;
+        let mut connected_7d_seconds: i64 = 0;
+        let mut first_seen: Option<String> = None;
+        let mut last_connected: Option<String> = None;
+
+        let window_24h = now - chrono::Duration::hours(24);
+        let window_7d = now - chrono::Duration::days(7);
+
+        for (i, (event_type, timestamp)) in events.iter().enumerate() {
+            if first_seen.is_none() {
+                first_seen = Some(timestamp.clone());
+            }
+
+            if event_type == "connect" {
+                last_connected = Some(timestamp.clone());
+            }
+
+            // Calculate session duration for disconnect events
+            if event_type == "disconnect" && i > 0 {
+                for j in (0..i).rev() {
+                    if events[j].0 == "connect" {
+                        if let (Ok(connect_time), Ok(disconnect_time)) = (
+                            chrono::DateTime::parse_from_rfc3339(&events[j].1),
+                            chrono::DateTime::parse_from_rfc3339(timestamp),
+                        ) {
+                            let session_secs = (disconnect_time - connect_time).num_seconds().max(0);
+                            total_connected_seconds += session_secs;
+
+                            // Check if session falls within time windows
+                            let connect_utc = connect_time.with_timezone(&chrono::Utc);
+                            let disconnect_utc = disconnect_time.with_timezone(&chrono::Utc);
+
+                            // 24h window
+                            if disconnect_utc > window_24h {
+                                let effective_start = if connect_utc > window_24h {
+                                    connect_utc
+                                } else {
+                                    window_24h
+                                };
+                                let secs_in_window = (disconnect_utc - effective_start).num_seconds().max(0);
+                                connected_24h_seconds += secs_in_window;
+                            }
+
+                            // 7d window
+                            if disconnect_utc > window_7d {
+                                let effective_start = if connect_utc > window_7d {
+                                    connect_utc
+                                } else {
+                                    window_7d
+                                };
+                                let secs_in_window = (disconnect_utc - effective_start).num_seconds().max(0);
+                                connected_7d_seconds += secs_in_window;
+                            }
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+
+        // If device is currently connected, add time from last connect to now
+        // Check the last event
+        if let Some((last_event_type, last_timestamp)) = events.last() {
+            if last_event_type == "connect" {
+                if let Ok(connect_time) = chrono::DateTime::parse_from_rfc3339(last_timestamp) {
+                    let connect_utc = connect_time.with_timezone(&chrono::Utc);
+                    let session_secs = (now - connect_utc).num_seconds().max(0);
+                    total_connected_seconds += session_secs;
+
+                    // Add to 24h and 7d windows
+                    if connect_utc > window_24h {
+                        connected_24h_seconds += session_secs;
+                    } else {
+                        connected_24h_seconds += (now - window_24h).num_seconds();
+                    }
+
+                    if connect_utc > window_7d {
+                        connected_7d_seconds += session_secs;
+                    } else {
+                        connected_7d_seconds += (now - window_7d).num_seconds();
+                    }
+                }
+            }
+        }
+
+        // Calculate percentages
+        let uptime_24h_percent = (connected_24h_seconds as f64 / 86400.0) * 100.0;
+        let uptime_7d_percent = (connected_7d_seconds as f64 / (86400.0 * 7.0)) * 100.0;
+
+        Ok(json!({
+            "uptime_24h_percent": (uptime_24h_percent * 100.0).round() / 100.0,
+            "uptime_7d_percent": (uptime_7d_percent * 100.0).round() / 100.0,
+            "total_connected_seconds": total_connected_seconds,
+            "first_seen": first_seen,
+            "last_connected": last_connected
+        }))
     }
 
     /// Delete a file record.

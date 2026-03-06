@@ -1697,3 +1697,180 @@ async fn test_total_connection_time_calculation() {
     // (even if brief due to test execution speed)
     assert!(total_connected >= 0, "Should have recorded connection time");
 }
+
+// ============================================================
+// Story 3-4: Physical Key Events Tests
+// ============================================================
+
+#[actix_web::test]
+async fn test_keyevent_home_key() {
+    let (_tmp, state, app) = setup_test_app!();
+    insert_device(&state, "keyevent-home", true, true).await;
+
+    let req = test::TestRequest::post()
+        .uri("/inspector/keyevent-home/keyevent")
+        .set_json(json!({"key": "home"}))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+
+    let body: Value = test::read_body_json(resp).await;
+    assert_eq!(body["status"], "ok");
+}
+
+#[actix_web::test]
+async fn test_keyevent_back_key() {
+    let (_tmp, state, app) = setup_test_app!();
+    insert_device(&state, "keyevent-back", true, true).await;
+
+    let req = test::TestRequest::post()
+        .uri("/inspector/keyevent-back/keyevent")
+        .set_json(json!({"key": "back"}))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+
+    let body: Value = test::read_body_json(resp).await;
+    assert_eq!(body["status"], "ok");
+}
+
+#[actix_web::test]
+async fn test_keyevent_volume_keys() {
+    let (_tmp, state, app) = setup_test_app!();
+    insert_device(&state, "keyevent-volume", true, true).await;
+
+    // Test volume_up
+    let req = test::TestRequest::post()
+        .uri("/inspector/keyevent-volume/keyevent")
+        .set_json(json!({"key": "volume_up"}))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+    let body: Value = test::read_body_json(resp).await;
+    assert_eq!(body["status"], "ok");
+
+    // Test volume_down
+    let req = test::TestRequest::post()
+        .uri("/inspector/keyevent-volume/keyevent")
+        .set_json(json!({"key": "volume_down"}))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+    let body: Value = test::read_body_json(resp).await;
+    assert_eq!(body["status"], "ok");
+}
+
+#[actix_web::test]
+async fn test_keyevent_power_key() {
+    let (_tmp, state, app) = setup_test_app!();
+    insert_device(&state, "keyevent-power", true, true).await;
+
+    let req = test::TestRequest::post()
+        .uri("/inspector/keyevent-power/keyevent")
+        .set_json(json!({"key": "power"}))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+
+    let body: Value = test::read_body_json(resp).await;
+    assert_eq!(body["status"], "ok");
+}
+
+#[actix_web::test]
+async fn test_keyevent_menu_key() {
+    let (_tmp, state, app) = setup_test_app!();
+    insert_device(&state, "keyevent-menu", true, true).await;
+
+    let req = test::TestRequest::post()
+        .uri("/inspector/keyevent-menu/keyevent")
+        .set_json(json!({"key": "menu"}))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+
+    let body: Value = test::read_body_json(resp).await;
+    assert_eq!(body["status"], "ok");
+}
+
+#[actix_web::test]
+async fn test_keyevent_wakeup_key() {
+    let (_tmp, state, app) = setup_test_app!();
+    insert_device(&state, "keyevent-wakeup", true, true).await;
+
+    let req = test::TestRequest::post()
+        .uri("/inspector/keyevent-wakeup/keyevent")
+        .set_json(json!({"key": "wakeup"}))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+
+    let body: Value = test::read_body_json(resp).await;
+    assert_eq!(body["status"], "ok");
+}
+
+#[actix_web::test]
+async fn test_keyevent_case_insensitive() {
+    let (_tmp, state, app) = setup_test_app!();
+    insert_device(&state, "keyevent-case", true, true).await;
+
+    // Test uppercase HOME
+    let req = test::TestRequest::post()
+        .uri("/inspector/keyevent-case/keyevent")
+        .set_json(json!({"key": "HOME"}))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+    let body: Value = test::read_body_json(resp).await;
+    assert_eq!(body["status"], "ok");
+
+    // Test mixed case Home
+    let req = test::TestRequest::post()
+        .uri("/inspector/keyevent-case/keyevent")
+        .set_json(json!({"key": "Home"}))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+    let body: Value = test::read_body_json(resp).await;
+    assert_eq!(body["status"], "ok");
+}
+
+#[actix_web::test]
+async fn test_keyevent_invalid_key_returns_400() {
+    let (_tmp, state, app) = setup_test_app!();
+    insert_device(&state, "keyevent-invalid", true, true).await;
+
+    let req = test::TestRequest::post()
+        .uri("/inspector/keyevent-invalid/keyevent")
+        .set_json(json!({"key": "invalid_key"}))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 400);
+
+    let body: Value = test::read_body_json(resp).await;
+    assert_eq!(body["status"], "error");
+    assert_eq!(body["error"], "ERR_INVALID_REQUEST");
+    // Verify error message contains list of supported keys
+    let message = body["message"].as_str().unwrap();
+    assert!(message.contains("Invalid key action: invalid_key"));
+    assert!(message.contains("Supported keys:"));
+    assert!(message.contains("home"));
+    assert!(message.contains("back"));
+    assert!(message.contains("volume_up"));
+    assert!(message.contains("volume_down"));
+}
+
+#[actix_web::test]
+async fn test_keyevent_nonexistent_device_returns_404() {
+    let (_tmp, _state, app) = setup_test_app!();
+
+    let req = test::TestRequest::post()
+        .uri("/inspector/nonexistent-keyevent-device/keyevent")
+        .set_json(json!({"key": "home"}))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 404);
+
+    let body: Value = test::read_body_json(resp).await;
+    assert_eq!(body["status"], "error");
+    assert_eq!(body["error"], "ERR_DEVICE_NOT_FOUND");
+}

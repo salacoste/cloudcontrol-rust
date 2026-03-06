@@ -194,6 +194,15 @@ async fn main() -> std::io::Result<()> {
                 "/api/devices/{udid}/tags/{tag}",
                 web::delete().to(routes::control::remove_device_tag),
             )
+            // ── Connection History ──
+            .route(
+                "/api/devices/{udid}/history",
+                web::get().to(routes::control::get_connection_history),
+            )
+            .route(
+                "/api/devices/{udid}/stats",
+                web::get().to(routes::control::get_connection_stats),
+            )
             // ── Files management ──
             .route("/files", web::get().to(routes::control::files))
             .route(

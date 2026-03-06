@@ -975,6 +975,46 @@ pub async fn inspector_keyevent(
         .unwrap_or("")
         .to_string();
 
+    // Define supported keys for validation
+    const SUPPORTED_KEYS: &[&str] = &[
+        "home", "back", "menu", "power", "wakeup",
+        "volume_up", "volume_down",
+        "enter", "tab", "del", "forward_del",
+        "dpad_up", "dpad_down", "dpad_left", "dpad_right"
+    ];
+
+    // Android keycode mapping (normalize case)
+    let android_key = match key.to_lowercase().as_str() {
+        "enter" => "enter",
+        "backspace" | "del" => "del",
+        "delete" | "forward_del" => "forward_del",
+        "home" => "home",
+        "back" => "back",
+        "tab" => "tab",
+        "escape" => "back",
+        "arrowup" | "dpad_up" => "dpad_up",
+        "arrowdown" | "dpad_down" => "dpad_down",
+        "arrowleft" | "dpad_left" => "dpad_left",
+        "arrowright" | "dpad_right" => "dpad_right",
+        "menu" => "menu",
+        "power" => "power",
+        "wakeup" => "wakeup",
+        "volume_up" => "volume_up",
+        "volume_down" => "volume_down",
+        other => other,
+    }
+    .to_string();
+
+    // Validate key is supported
+    if !SUPPORTED_KEYS.contains(&android_key.as_str()) {
+        return HttpResponse::BadRequest().json(json!({
+            "status": "error",
+            "error": "ERR_INVALID_REQUEST",
+            "message": format!("Invalid key action: {}. Supported keys: {}",
+                key, SUPPORTED_KEYS.join(", "))
+        }));
+    }
+
     let (device, client) = match get_device_client(&state, &udid).await {
         Ok(v) => v,
         Err(resp) => return resp,
@@ -983,26 +1023,6 @@ pub async fn inspector_keyevent(
     if device.get("is_mock").and_then(|v| v.as_bool()).unwrap_or(false) {
         return HttpResponse::Ok().json(json!({"status": "ok"}));
     }
-
-    // Android keycode mapping
-    let android_key = match key.as_str() {
-        "Enter" => "enter",
-        "Backspace" | "DEL" => "del",
-        "Delete" => "forward_del",
-        "Home" | "HOME" | "home" => "home",
-        "Back" | "BACK" | "back" => "back",
-        "Tab" => "tab",
-        "Escape" => "back",
-        "ArrowUp" => "dpad_up",
-        "ArrowDown" => "dpad_down",
-        "ArrowLeft" => "dpad_left",
-        "ArrowRight" => "dpad_right",
-        "Menu" | "MENU" | "menu" => "menu",
-        "Power" | "POWER" | "power" => "power",
-        "WAKEUP" | "wakeup" => "wakeup",
-        other => other,
-    }
-    .to_string();
 
     let serial = device.get("serial").and_then(|v| v.as_str()).unwrap_or("").to_string();
     tokio::spawn(async move {

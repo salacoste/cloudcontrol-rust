@@ -105,6 +105,9 @@ impl PhoneService {
             .await
             .map_err(|e| format!("DB upsert failed: {}", e))?;
 
+        // Record connection event
+        let _ = self.record_connection_event(identifier, "connect").await;
+
         Ok(())
     }
 
@@ -137,6 +140,9 @@ impl PhoneService {
             .update(identifier, &data)
             .await
             .map_err(|e| format!("DB update failed: {}", e))?;
+
+        // Record disconnection event
+        let _ = self.record_connection_event(identifier, "disconnect").await;
 
         Ok(())
     }
@@ -235,6 +241,41 @@ impl PhoneService {
     pub async fn query_devices_by_tag(&self, tag: &str) -> Result<Vec<Value>, String> {
         self.db
             .find_devices_by_tag(tag)
+            .await
+            .map_err(|e| format!("DB query failed: {}", e))
+    }
+
+    // ─── Connection History ───
+
+    /// Record a connection event (connect or disconnect).
+    pub async fn record_connection_event(&self, udid: &str, event_type: &str) -> Result<(), String> {
+        let timestamp = chrono::Utc::now().to_rfc3339();
+        self.db
+            .record_connection_event(udid, event_type, &timestamp)
+            .await
+            .map_err(|e| format!("Failed to record connection event: {}", e))
+    }
+
+    /// Get connection history for a device with session durations.
+    pub async fn get_connection_history(&self, udid: &str, limit: i64) -> Result<Vec<Value>, String> {
+        // Verify device exists
+        self.query_info_by_udid(udid).await?
+            .ok_or_else(|| format!("Device not found: {}", udid))?;
+
+        self.db
+            .get_connection_history_with_durations(udid, limit)
+            .await
+            .map_err(|e| format!("DB query failed: {}", e))
+    }
+
+    /// Get connection statistics for a device.
+    pub async fn get_connection_stats(&self, udid: &str) -> Result<Value, String> {
+        // Verify device exists
+        self.query_info_by_udid(udid).await?
+            .ok_or_else(|| format!("Device not found: {}", udid))?;
+
+        self.db
+            .get_connection_stats(udid)
             .await
             .map_err(|e| format!("DB query failed: {}", e))
     }
