@@ -263,12 +263,31 @@ pub async fn installfile(state: web::Data<AppState>) -> HttpResponse {
 
 // ═══════════════ DEVICE API ═══════════════
 
-/// GET /list → JSON array of online devices
-pub async fn device_list(state: web::Data<AppState>) -> HttpResponse {
+/// GET /list?tag=xxx → JSON array of online devices (optionally filtered by tag)
+pub async fn device_list(
+    state: web::Data<AppState>,
+    query: web::Query<std::collections::HashMap<String, String>>,
+) -> HttpResponse {
     let phone_service = crate::services::phone_service::PhoneService::new(state.db.clone());
-    match phone_service.query_device_list().await {
-        Ok(devices) => HttpResponse::Ok().json(devices),
-        Err(e) => HttpResponse::InternalServerError().json(json!({"error": e})),
+
+    // Check if tag filter is provided
+    if let Some(tag) = query.get("tag") {
+        if !tag.is_empty() {
+            match phone_service.query_devices_by_tag(tag).await {
+                Ok(devices) => HttpResponse::Ok().json(devices),
+                Err(e) => HttpResponse::InternalServerError().json(json!({"error": e})),
+            }
+        } else {
+            match phone_service.query_device_list().await {
+                Ok(devices) => HttpResponse::Ok().json(devices),
+                Err(e) => HttpResponse::InternalServerError().json(json!({"error": e})),
+            }
+        }
+    } else {
+        match phone_service.query_device_list().await {
+            Ok(devices) => HttpResponse::Ok().json(devices),
+            Err(e) => HttpResponse::InternalServerError().json(json!({"error": e})),
+        }
     }
 }
 
@@ -1807,6 +1826,95 @@ pub async fn reconnect_device(
                 "status": "error",
                 "message": "Device unreachable"
             }))
+        }
+    }
+}
+
+// ═══════════════ TAG MANAGEMENT ═══════════════
+
+/// POST /api/devices/{udid}/tags → add tags to device
+pub async fn add_device_tags(
+    state: web::Data<AppState>,
+    path: web::Path<String>,
+    body: web::Json<Value>,
+) -> HttpResponse {
+    let udid = path.into_inner();
+
+    // Extract tags from request body
+    let tags: Vec<String> = body
+        .get("tags")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .filter(|s| !s.is_empty())
+                .collect()
+        })
+        .unwrap_or_default();
+
+    if tags.is_empty() {
+        return HttpResponse::BadRequest().json(json!({
+            "status": "error",
+            "error": "ERR_INVALID_REQUEST",
+            "message": "No valid tags provided"
+        }));
+    }
+
+    let phone_service = crate::services::phone_service::PhoneService::new(state.db.clone());
+
+    match phone_service.add_tags(&udid, &tags).await {
+        Ok(updated_tags) => {
+            HttpResponse::Ok().json(json!({
+                "status": "ok",
+                "tags": updated_tags
+            }))
+        }
+        Err(e) => {
+            if e.contains("not found") {
+                HttpResponse::NotFound().json(json!({
+                    "status": "error",
+                    "error": "ERR_DEVICE_NOT_FOUND",
+                    "message": e
+                }))
+            } else {
+                HttpResponse::InternalServerError().json(json!({
+                    "status": "error",
+                    "message": e
+                }))
+            }
+        }
+    }
+}
+
+/// DELETE /api/devices/{udid}/tags/{tag} → remove tag from device
+pub async fn remove_device_tag(
+    state: web::Data<AppState>,
+    path: web::Path<(String, String)>,
+) -> HttpResponse {
+    let (udid, tag) = path.into_inner();
+
+    let phone_service = crate::services::phone_service::PhoneService::new(state.db.clone());
+
+    match phone_service.remove_tag(&udid, &tag).await {
+        Ok(updated_tags) => {
+            HttpResponse::Ok().json(json!({
+                "status": "ok",
+                "tags": updated_tags
+            }))
+        }
+        Err(e) => {
+            if e.contains("not found") {
+                HttpResponse::NotFound().json(json!({
+                    "status": "error",
+                    "error": "ERR_DEVICE_NOT_FOUND",
+                    "message": e
+                }))
+            } else {
+                HttpResponse::InternalServerError().json(json!({
+                    "status": "error",
+                    "message": e
+                }))
+            }
         }
     }
 }

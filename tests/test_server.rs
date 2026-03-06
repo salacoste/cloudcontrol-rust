@@ -37,6 +37,8 @@ macro_rules! setup_test_app {
                 .route("/api/devices/add", web::post().to(routes::control::add_device))
                 .route("/api/devices/{udid}", web::delete().to(routes::control::disconnect_device))
                 .route("/api/devices/{udid}/reconnect", web::post().to(routes::control::reconnect_device))
+                .route("/api/devices/{udid}/tags", web::post().to(routes::control::add_device_tags))
+                .route("/api/devices/{udid}/tags/{tag}", web::delete().to(routes::control::remove_device_tag))
                 .route("/api/screenshot/batch", web::post().to(routes::control::batch_screenshot))
                 .route("/files", web::get().to(routes::control::files))
                 .route("/file/delete/{group}/{filename}", web::get().to(routes::control::file_delete))
@@ -1213,4 +1215,201 @@ async fn test_input_unicode_characters() {
 
     let body: Value = test::read_body_json(resp).await;
     assert_eq!(body["status"], "ok");
+}
+
+// ============================================================
+// Story 1B-4: Device Tagging System Tests
+// ============================================================
+
+#[actix_web::test]
+async fn test_add_single_tag() {
+    let (_tmp, state, app) = setup_test_app!();
+    insert_device(&state, "tag-device-1", true, true).await;
+
+    let req = test::TestRequest::post()
+        .uri("/api/devices/tag-device-1/tags")
+        .set_json(json!({"tags": ["regression-tests"]}))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+
+    let body: Value = test::read_body_json(resp).await;
+    assert_eq!(body["status"], "ok");
+    assert!(body["tags"].as_array().unwrap().contains(&json!("regression-tests")));
+}
+
+#[actix_web::test]
+async fn test_add_multiple_tags() {
+    let (_tmp, state, app) = setup_test_app!();
+    insert_device(&state, "tag-device-2", true, true).await;
+
+    let req = test::TestRequest::post()
+        .uri("/api/devices/tag-device-2/tags")
+        .set_json(json!({"tags": ["physical", "us-market", "low-battery"]}))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+
+    let body: Value = test::read_body_json(resp).await;
+    assert_eq!(body["status"], "ok");
+    let tags = body["tags"].as_array().unwrap();
+    assert!(tags.contains(&json!("physical")));
+    assert!(tags.contains(&json!("us-market")));
+    assert!(tags.contains(&json!("low-battery")));
+}
+
+#[actix_web::test]
+async fn test_add_duplicate_tag() {
+    let (_tmp, state, app) = setup_test_app!();
+    insert_device(&state, "tag-device-3", true, true).await;
+
+    // Add tag first time
+    let req1 = test::TestRequest::post()
+        .uri("/api/devices/tag-device-3/tags")
+        .set_json(json!({"tags": ["android-13"]}))
+        .to_request();
+    let resp1 = test::call_service(&app, req1).await;
+    let body1: Value = test::read_body_json(resp1).await;
+    let count1 = body1["tags"].as_array().unwrap().len();
+
+    // Add same tag again (idempotent)
+    let req2 = test::TestRequest::post()
+        .uri("/api/devices/tag-device-3/tags")
+        .set_json(json!({"tags": ["android-13"]}))
+        .to_request();
+    let resp2 = test::call_service(&app, req2).await;
+    assert_eq!(resp2.status(), 200);
+
+    let body2: Value = test::read_body_json(resp2).await;
+    let count2 = body2["tags"].as_array().unwrap().len();
+    assert_eq!(count1, count2); // Should not add duplicate
+}
+
+#[actix_web::test]
+async fn test_remove_tag() {
+    let (_tmp, state, app) = setup_test_app!();
+    insert_device(&state, "tag-device-4", true, true).await;
+
+    // Add tags first
+    let req_add = test::TestRequest::post()
+        .uri("/api/devices/tag-device-4/tags")
+        .set_json(json!({"tags": ["old-tag", "keep-tag"]}))
+        .to_request();
+    test::call_service(&app, req_add).await;
+
+    // Remove one tag
+    let req = test::TestRequest::delete()
+        .uri("/api/devices/tag-device-4/tags/old-tag")
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+
+    let body: Value = test::read_body_json(resp).await;
+    let tags = body["tags"].as_array().unwrap();
+    assert!(!tags.contains(&json!("old-tag")));
+    assert!(tags.contains(&json!("keep-tag")));
+}
+
+#[actix_web::test]
+async fn test_filter_by_tag() {
+    let (_tmp, state, app) = setup_test_app!();
+    insert_device(&state, "tag-filter-a", true, true).await;
+    insert_device(&state, "tag-filter-b", true, true).await;
+
+    // Add different tags to each device
+    let req_a = test::TestRequest::post()
+        .uri("/api/devices/tag-filter-a/tags")
+        .set_json(json!({"tags": ["android-13"]}))
+        .to_request();
+    test::call_service(&app, req_a).await;
+
+    let req_b = test::TestRequest::post()
+        .uri("/api/devices/tag-filter-b/tags")
+        .set_json(json!({"tags": ["android-12"]}))
+        .to_request();
+    test::call_service(&app, req_b).await;
+
+    // Filter by tag
+    let req = test::TestRequest::get()
+        .uri("/list?tag=android-13")
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+
+    let body: Value = test::read_body_json(resp).await;
+    let devices = body.as_array().unwrap();
+    assert_eq!(devices.len(), 1);
+    assert_eq!(devices[0]["udid"], "tag-filter-a");
+}
+
+#[actix_web::test]
+async fn test_filter_by_tag_no_match() {
+    let (_tmp, state, app) = setup_test_app!();
+    insert_device(&state, "tag-nomatch", true, true).await;
+
+    // Add a tag
+    let req_add = test::TestRequest::post()
+        .uri("/api/devices/tag-nomatch/tags")
+        .set_json(json!({"tags": ["android-13"]}))
+        .to_request();
+    test::call_service(&app, req_add).await;
+
+    // Filter by non-existent tag
+    let req = test::TestRequest::get()
+        .uri("/list?tag=nonexistent-tag")
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+
+    let body: Value = test::read_body_json(resp).await;
+    let devices = body.as_array().unwrap();
+    assert_eq!(devices.len(), 0);
+}
+
+#[actix_web::test]
+async fn test_tags_nonexistent_device() {
+    let (_tmp, _state, app) = setup_test_app!();
+
+    let req = test::TestRequest::post()
+        .uri("/api/devices/nonexistent-tags-device/tags")
+        .set_json(json!({"tags": ["test"]}))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 404);
+
+    let body: Value = test::read_body_json(resp).await;
+    assert_eq!(body["status"], "error");
+    assert_eq!(body["error"], "ERR_DEVICE_NOT_FOUND");
+}
+
+#[actix_web::test]
+async fn test_remove_tag_nonexistent_device() {
+    let (_tmp, _state, app) = setup_test_app!();
+
+    let req = test::TestRequest::delete()
+        .uri("/api/devices/nonexistent-remove/tags/test")
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 404);
+
+    let body: Value = test::read_body_json(resp).await;
+    assert_eq!(body["status"], "error");
+    assert_eq!(body["error"], "ERR_DEVICE_NOT_FOUND");
+}
+
+#[actix_web::test]
+async fn test_add_empty_tags() {
+    let (_tmp, state, app) = setup_test_app!();
+    insert_device(&state, "tag-empty", true, true).await;
+
+    let req = test::TestRequest::post()
+        .uri("/api/devices/tag-empty/tags")
+        .set_json(json!({"tags": []}))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 400);
+
+    let body: Value = test::read_body_json(resp).await;
+    assert_eq!(body["status"], "error");
+    assert_eq!(body["error"], "ERR_INVALID_REQUEST");
 }

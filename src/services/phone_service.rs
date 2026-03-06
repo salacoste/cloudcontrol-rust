@@ -210,4 +210,32 @@ impl PhoneService {
 
         Ok(())
     }
+
+    // ─── Tag Management ───
+
+    /// Add tags to a device. Returns the updated tags list.
+    pub async fn add_tags(&self, udid: &str, tags: &[String]) -> Result<Vec<String>, String> {
+        // Verify device exists
+        self.query_info_by_udid(udid).await?
+            .ok_or_else(|| format!("Device not found: {}", udid))?;
+
+        self.db.add_tags(udid, tags).await
+    }
+
+    /// Remove a tag from a device. Returns the updated tags list.
+    pub async fn remove_tag(&self, udid: &str, tag: &str) -> Result<Vec<String>, String> {
+        // Verify device exists
+        self.query_info_by_udid(udid).await?
+            .ok_or_else(|| format!("Device not found: {}", udid))?;
+
+        self.db.remove_tag(udid, tag).await
+    }
+
+    /// Query devices filtered by tag.
+    pub async fn query_devices_by_tag(&self, tag: &str) -> Result<Vec<Value>, String> {
+        self.db
+            .find_devices_by_tag(tag)
+            .await
+            .map_err(|e| format!("DB query failed: {}", e))
+    }
 }

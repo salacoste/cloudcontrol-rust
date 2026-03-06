@@ -35,7 +35,7 @@ const FIELD_MAPPING: &[(&str, &str)] = &[
 ];
 
 /// JSON fields stored as TEXT in SQLite
-const JSON_FIELDS: &[&str] = &["memory", "cpu", "battery", "display"];
+const JSON_FIELDS: &[&str] = &["memory", "cpu", "battery", "display", "tags"];
 
 /// Boolean fields stored as INTEGER (0/1)
 const BOOL_FIELDS: &[&str] = &["present", "ready", "using_device", "is_server", "is_mock"];
@@ -156,7 +156,8 @@ impl Database {
                 hwaddr TEXT,
                 created_at TEXT,
                 updated_at TEXT,
-                extra_data TEXT
+                extra_data TEXT,
+                tags TEXT DEFAULT '[]'
             )
             "#,
         )
@@ -189,6 +190,12 @@ impl Database {
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_files_group ON installed_file(group_name)")
             .execute(&self.pool)
             .await?;
+
+        // Migration: Add tags column to existing databases
+        // This will silently fail if column already exists, which is fine
+        let _ = sqlx::query("ALTER TABLE devices ADD COLUMN tags TEXT DEFAULT '[]'")
+            .execute(&self.pool)
+            .await;
 
         Ok(())
     }
@@ -427,6 +434,84 @@ impl Database {
             .await?;
         tracing::debug!("All devices deleted from SQLite");
         Ok(())
+    }
+
+    // ─── Tag Operations ───
+
+    /// Add tags to a device. Returns the updated tags list.
+    pub async fn add_tags(&self, udid: &str, new_tags: &[String]) -> Result<Vec<String>, String> {
+        // Get current device
+        let device = self.find_by_udid(udid).await
+            .map_err(|e| format!("Database error: {}", e))?
+            .ok_or_else(|| format!("Device not found: {}", udid))?;
+
+        // Parse current tags
+        let mut tags: Vec<String> = device.get("tags")
+            .and_then(|v| v.as_array())
+            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+            .unwrap_or_default();
+
+        // Add new tags (deduplicate)
+        for tag in new_tags {
+            if !tags.contains(tag) && !tag.is_empty() {
+                tags.push(tag.clone());
+            }
+        }
+
+        // Update device
+        let tags_json = serde_json::to_string(&tags).unwrap_or_else(|_| "[]".to_string());
+        sqlx::query("UPDATE devices SET tags = ?1 WHERE udid = ?2")
+            .bind(&tags_json)
+            .bind(udid)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| format!("Failed to update tags: {}", e))?;
+
+        Ok(tags)
+    }
+
+    /// Remove a tag from a device. Returns the updated tags list.
+    pub async fn remove_tag(&self, udid: &str, tag_to_remove: &str) -> Result<Vec<String>, String> {
+        // Get current device
+        let device = self.find_by_udid(udid).await
+            .map_err(|e| format!("Database error: {}", e))?
+            .ok_or_else(|| format!("Device not found: {}", udid))?;
+
+        // Parse and filter tags
+        let tags: Vec<String> = device.get("tags")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .filter(|t| t != tag_to_remove)
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        // Update device
+        let tags_json = serde_json::to_string(&tags).unwrap_or_else(|_| "[]".to_string());
+        sqlx::query("UPDATE devices SET tags = ?1 WHERE udid = ?2")
+            .bind(&tags_json)
+            .bind(udid)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| format!("Failed to update tags: {}", e))?;
+
+        Ok(tags)
+    }
+
+    /// Find devices by tag (filter devices where tags array contains the tag).
+    pub async fn find_devices_by_tag(&self, tag: &str) -> Result<Vec<Value>, sqlx::Error> {
+        // SQLite JSON search: tags column contains the tag string
+        let pattern = format!("%\"{}\"%", tag);
+        let rows = sqlx::query(
+            "SELECT * FROM devices WHERE present = 1 AND tags LIKE ?1"
+        )
+        .bind(&pattern)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows.iter().map(Self::device_row_to_json).collect())
     }
 
     // ─── File Operations ───

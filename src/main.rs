@@ -185,6 +185,15 @@ async fn main() -> std::io::Result<()> {
                 "/api/devices/{udid}/reconnect",
                 web::post().to(routes::control::reconnect_device),
             )
+            // ── Device Tags ──
+            .route(
+                "/api/devices/{udid}/tags",
+                web::post().to(routes::control::add_device_tags),
+            )
+            .route(
+                "/api/devices/{udid}/tags/{tag}",
+                web::delete().to(routes::control::remove_device_tag),
+            )
             // ── Files management ──
             .route("/files", web::get().to(routes::control::files))
             .route(

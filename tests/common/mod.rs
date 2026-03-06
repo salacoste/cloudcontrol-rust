@@ -37,6 +37,7 @@ pub fn make_device_json(udid: &str, present: bool, is_mock: bool) -> Value {
         "memory": {"total": 8192},
         "cpu": {"cores": 8},
         "battery": {"level": 85},
+        "tags": [],
     })
 }
 
