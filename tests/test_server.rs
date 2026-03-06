@@ -35,6 +35,8 @@ macro_rules! setup_test_app {
                 .route("/shell", web::post().to(routes::control::shell))
                 .route("/api/wifi-connect", web::post().to(routes::control::wifi_connect))
                 .route("/api/devices/add", web::post().to(routes::control::add_device))
+                .route("/api/devices/{udid}", web::delete().to(routes::control::disconnect_device))
+                .route("/api/devices/{udid}/reconnect", web::post().to(routes::control::reconnect_device))
                 .route("/files", web::get().to(routes::control::files))
                 .route("/file/delete/{group}/{filename}", web::get().to(routes::control::file_delete))
                 .route("/nio/stats", web::get().to(routes::nio::nio_stats)),
@@ -394,4 +396,101 @@ async fn test_add_device_default_port() {
     let resp = test::call_service(&app, req).await;
     // Should attempt connection (will fail since IP is unreachable)
     assert_eq!(resp.status(), 503);
+}
+
+// ═══════════════ DEVICE DISCONNECT/RECONNECT TESTS (Story 1B-6) ═══════════════
+
+#[actix_web::test]
+async fn test_disconnect_device_success() {
+    let (_tmp, state, app) = setup_test_app!();
+    // Insert a connected device
+    insert_device(&state, "disconnect-test-1", true, false).await;
+
+    // Verify device is initially present
+    let device_before = state.db.find_by_udid("disconnect-test-1").await.unwrap();
+    assert!(device_before.is_some());
+    assert_eq!(device_before.unwrap()["present"], true);
+
+    // Disconnect the device
+    let req = test::TestRequest::delete()
+        .uri("/api/devices/disconnect-test-1")
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+
+    // Verify API response
+    let body: Value = test::read_body_json(resp).await;
+    assert_eq!(body["status"], "success");
+
+    // Verify device is now marked offline in database
+    let device_after = state.db.find_by_udid("disconnect-test-1").await.unwrap();
+    assert!(device_after.is_some());
+    assert_eq!(device_after.unwrap()["present"], false);
+}
+
+#[actix_web::test]
+async fn test_disconnect_device_not_found() {
+    let (_tmp, _state, app) = setup_test_app!();
+    // Try to disconnect a non-existent device
+    let req = test::TestRequest::delete()
+        .uri("/api/devices/nonexistent-device")
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 404);
+}
+
+#[actix_web::test]
+async fn test_reconnect_device_not_found() {
+    let (_tmp, _state, app) = setup_test_app!();
+    // Try to reconnect a non-existent device
+    let req = test::TestRequest::post()
+        .uri("/api/devices/nonexistent-device/reconnect")
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 404);
+}
+
+#[actix_web::test]
+async fn test_reconnect_device_unreachable() {
+    let (_tmp, state, app) = setup_test_app!();
+    // Insert an offline device with an unreachable IP
+    let data = json!({
+        "udid": "reconnect-test-unreachable",
+        "ip": "198.51.100.1",  // Non-routable IP
+        "port": 9008,
+        "present": false,
+        "model": "TestPhone",
+    });
+    state.db.upsert("reconnect-test-unreachable", &data).await.unwrap();
+
+    // Try to reconnect
+    let req = test::TestRequest::post()
+        .uri("/api/devices/reconnect-test-unreachable/reconnect")
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    // Should return 503 since device is unreachable
+    assert_eq!(resp.status(), 503);
+}
+
+#[actix_web::test]
+async fn test_reconnect_device_no_ip() {
+    let (_tmp, state, app) = setup_test_app!();
+    // Insert an offline device without an IP address
+    let data = json!({
+        "udid": "reconnect-test-no-ip",
+        "present": false,
+        "model": "TestPhone",
+    });
+    state.db.upsert("reconnect-test-no-ip", &data).await.unwrap();
+
+    // Try to reconnect - should return 400 since no IP
+    let req = test::TestRequest::post()
+        .uri("/api/devices/reconnect-test-no-ip/reconnect")
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 400);
+
+    let body: Value = test::read_body_json(resp).await;
+    assert_eq!(body["status"], "error");
+    assert!(body["message"].as_str().unwrap().contains("no IP address"));
 }

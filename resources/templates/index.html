@@ -495,10 +495,16 @@
           </div>
 
           <!-- Actions -->
-          <div style="margin-top: 12px; display: flex; gap: 8px;">
-            <a :href="'/devices/' + device.udid + '/remote'" class="term-btn term-btn-sm" style="flex: 1; justify-content: center;" @click.stop>
+          <div style="margin-top: 12px; display: flex; gap: 8px; flex-wrap: wrap;">
+            <a v-if="device.present" :href="'/devices/' + device.udid + '/remote'" class="term-btn term-btn-sm" style="flex: 1; justify-content: center;" @click.stop>
               CONTROL
             </a>
+            <button v-if="device.present" class="term-btn term-btn-sm term-btn-danger" @click.stop="disconnectDevice(device)" title="Disconnect">
+              DISC
+            </button>
+            <button v-if="!device.present" class="term-btn term-btn-sm" style="flex: 1; justify-content: center; background: var(--term-cyan);" @click.stop="reconnectDevice(device)" title="Reconnect">
+              RECONNECT
+            </button>
             <button class="term-btn term-btn-sm term-btn-danger" @click.stop="rebootDevice(device)" title="Reboot">
               PWR
             </button>
@@ -667,6 +673,46 @@
           if (confirm('Reboot ' + device.model + '?')) {
             this.addLog('warn', 'Rebooting device: ' + device.model);
           }
+        },
+        disconnectDevice: function(device) {
+          var self = this;
+          var warning = 'Disconnect ' + device.model + '?\n\n';
+          warning += 'WARNING: This will close the device connection.\n';
+          warning += 'Any active operations (control sessions, file transfers) will be interrupted.\n';
+          warning += 'The device will be marked as offline.';
+          if (!confirm(warning)) {
+            return;
+          }
+          fetch('/api/devices/' + device.udid, {method: 'DELETE'})
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+              if (data.status === 'success') {
+                self.addLog('info', 'Device disconnected: ' + device.model);
+                device.present = false;
+              } else {
+                self.addLog('error', 'Disconnect failed: ' + data.message);
+              }
+            })
+            .catch(function(err) {
+              self.addLog('error', 'Disconnect error: ' + err);
+            });
+        },
+        reconnectDevice: function(device) {
+          var self = this;
+          this.addLog('info', 'Reconnecting device: ' + device.model);
+          fetch('/api/devices/' + device.udid + '/reconnect', {method: 'POST'})
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+              if (data.status === 'success') {
+                self.addLog('info', 'Device reconnected: ' + device.model);
+                device.present = true;
+              } else {
+                self.addLog('error', 'Reconnect failed: ' + data.message);
+              }
+            })
+            .catch(function(err) {
+              self.addLog('error', 'Reconnect error: ' + err);
+            });
         },
         addLog: function(level, msg) {
           var now = new Date();

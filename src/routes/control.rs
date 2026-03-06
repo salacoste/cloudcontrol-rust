@@ -1334,6 +1334,140 @@ pub async fn add_device(
     }))
 }
 
+// ═══════════════ DEVICE DISCONNECT/RECONNECT ═══════════════
+
+/// DELETE /api/devices/{udid} → manually disconnect a device
+pub async fn disconnect_device(
+    state: web::Data<AppState>,
+    path: web::Path<String>,
+) -> HttpResponse {
+    let udid = path.into_inner();
+
+    let phone_service = crate::services::phone_service::PhoneService::new(state.db.clone());
+
+    // Check if device exists
+    match phone_service.query_info_by_udid(&udid).await {
+        Ok(Some(_)) => {
+            // Mark device as offline
+            match phone_service.offline_connected(&udid).await {
+                Ok(()) => {
+                    tracing::info!("[Disconnect] Device {} disconnected manually", udid);
+                    HttpResponse::Ok().json(json!({
+                        "status": "success",
+                        "message": "Device disconnected successfully"
+                    }))
+                }
+                Err(e) => {
+                    tracing::error!("[Disconnect] Failed to disconnect {}: {}", udid, e);
+                    HttpResponse::InternalServerError().json(json!({
+                        "status": "error",
+                        "message": format!("Failed to disconnect: {}", e)
+                    }))
+                }
+            }
+        }
+        Ok(None) => {
+            HttpResponse::NotFound().json(json!({
+                "status": "error",
+                "message": "Device not found"
+            }))
+        }
+        Err(e) => {
+            HttpResponse::InternalServerError().json(json!({
+                "status": "error",
+                "message": format!("Database error: {}", e)
+            }))
+        }
+    }
+}
+
+/// POST /api/devices/{udid}/reconnect → attempt to reconnect a disconnected device
+pub async fn reconnect_device(
+    state: web::Data<AppState>,
+    path: web::Path<String>,
+) -> HttpResponse {
+    let udid = path.into_inner();
+
+    let phone_service = crate::services::phone_service::PhoneService::new(state.db.clone());
+
+    // Get device info to find IP address
+    let device = match phone_service.query_info_by_udid(&udid).await {
+        Ok(Some(d)) => d,
+        Ok(None) => {
+            return HttpResponse::NotFound().json(json!({
+                "status": "error",
+                "message": "Device not found"
+            }))
+        }
+        Err(e) => {
+            return HttpResponse::InternalServerError().json(json!({
+                "status": "error",
+                "message": format!("Database error: {}", e)
+            }))
+        }
+    };
+
+    // Get IP and port from device info
+    let ip = match device.get("ip").and_then(|v| v.as_str()) {
+        Some(ip) => ip,
+        None => {
+            return HttpResponse::BadRequest().json(json!({
+                "status": "error",
+                "message": "Device has no IP address stored"
+            }))
+        }
+    };
+
+    let port = device
+        .get("port")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(9008) as u16;
+
+    // Try to connect to ATX agent to verify device is reachable
+    let url = format!("http://{}:{}/info", ip, port);
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .no_proxy()
+        .build()
+        .unwrap_or_default();
+
+    match client.get(&url).send().await {
+        Ok(resp) => {
+            if resp.status().is_success() {
+                // Device is reachable - update status
+                match phone_service.on_connected(&udid, ip).await {
+                    Ok(()) => {
+                        tracing::info!("[Reconnect] Device {} reconnected successfully", udid);
+                        HttpResponse::Ok().json(json!({
+                            "status": "success",
+                            "message": "Device reconnected successfully"
+                        }))
+                    }
+                    Err(e) => {
+                        tracing::error!("[Reconnect] Failed to update device {}: {}", udid, e);
+                        HttpResponse::InternalServerError().json(json!({
+                            "status": "error",
+                            "message": format!("Failed to update device: {}", e)
+                        }))
+                    }
+                }
+            } else {
+                HttpResponse::ServiceUnavailable().json(json!({
+                    "status": "error",
+                    "message": format!("Device returned status {}", resp.status())
+                }))
+            }
+        }
+        Err(e) => {
+            tracing::warn!("[Reconnect] Device {} unreachable: {}", udid, e);
+            HttpResponse::ServiceUnavailable().json(json!({
+                "status": "error",
+                "message": "Device unreachable"
+            }))
+        }
+    }
+}
+
 // ═══════════════ FILES ═══════════════
 
 /// GET /files?sort=&page=1 → paginated file list JSON
