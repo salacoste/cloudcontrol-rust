@@ -513,8 +513,28 @@ pub async fn batch_screenshot(
         }));
     }
 
-    let quality: u8 = body.quality.unwrap_or(70).max(30).min(95);
-    let scale: f64 = body.scale.unwrap_or(1.0).max(0.25).min(1.0);
+    // Batch size limit to prevent resource exhaustion
+    const MAX_BATCH_SIZE: usize = 50;
+    if devices.len() > MAX_BATCH_SIZE {
+        return HttpResponse::BadRequest().json(json!({
+            "status": "error",
+            "message": format!("Too many devices. Maximum is {}", MAX_BATCH_SIZE)
+        }));
+    }
+
+    // Check for duplicate UDIDs
+    let mut seen = std::collections::HashSet::new();
+    for udid in devices {
+        if !seen.insert(udid) {
+            return HttpResponse::BadRequest().json(json!({
+                "status": "error",
+                "message": format!("Duplicate device UDID: {}", udid)
+            }));
+        }
+    }
+
+    let quality: u8 = body.quality.unwrap_or(70).clamp(30, 95);
+    let scale: f64 = body.scale.unwrap_or(1.0).clamp(0.25, 1.0);
 
     // Capture screenshots concurrently
     let mut tasks = Vec::new();
@@ -590,7 +610,10 @@ pub async fn batch_screenshot(
                 success_count += 1;
             }
             Err(e) => {
-                let error_code = if e.contains("not found") || e.contains("disconnected") {
+                // More precise error classification matching AC spec
+                let error_code = if e.contains("not found") {
+                    "ERR_DEVICE_NOT_FOUND"
+                } else if e.contains("disconnected") || e.contains("unreachable") {
                     "ERR_DEVICE_DISCONNECTED"
                 } else {
                     "ERR_SCREENSHOT_FAILED"

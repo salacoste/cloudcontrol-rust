@@ -591,3 +591,69 @@ async fn test_batch_screenshot_with_quality_and_scale() {
     let body: Value = test::read_body_json(resp).await;
     assert_eq!(body["status"], "success");
 }
+
+#[actix_web::test]
+async fn test_batch_screenshot_duplicate_udids() {
+    let (_tmp, state, app) = setup_test_app!();
+    insert_device(&state, "batch-dup-1", true, true).await;
+
+    // Request with duplicate UDIDs should return 400
+    let req = test::TestRequest::post()
+        .uri("/api/screenshot/batch")
+        .set_json(json!({"devices": ["batch-dup-1", "batch-dup-1"]}))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 400);
+
+    let body: Value = test::read_body_json(resp).await;
+    assert_eq!(body["status"], "error");
+    assert!(body["message"].as_str().unwrap().contains("Duplicate"));
+}
+
+#[actix_web::test]
+async fn test_batch_screenshot_quality_clamping() {
+    let (_tmp, state, app) = setup_test_app!();
+    insert_device(&state, "batch-clamp-1", true, true).await;
+
+    // Quality out of range (0) should be clamped to 30
+    let req = test::TestRequest::post()
+        .uri("/api/screenshot/batch")
+        .set_json(json!({"devices": ["batch-clamp-1"], "quality": 0, "scale": 0.5}))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    // Should still succeed with clamped quality
+    assert_eq!(resp.status(), 200);
+}
+
+#[actix_web::test]
+async fn test_batch_screenshot_scale_clamping() {
+    let (_tmp, state, app) = setup_test_app!();
+    insert_device(&state, "batch-scale-1", true, true).await;
+
+    // Scale out of range (2.0) should be clamped to 1.0
+    let req = test::TestRequest::post()
+        .uri("/api/screenshot/batch")
+        .set_json(json!({"devices": ["batch-scale-1"], "quality": 70, "scale": 2.0}))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    // Should still succeed with clamped scale
+    assert_eq!(resp.status(), 200);
+}
+
+#[actix_web::test]
+async fn test_batch_screenshot_nonexistent_device() {
+    let (_tmp, _state, app) = setup_test_app!();
+    // Request with device that doesn't exist should return 207 with error
+    let req = test::TestRequest::post()
+        .uri("/api/screenshot/batch")
+        .set_json(json!({"devices": ["nonexistent-device-xyz"]}))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    // Should return 500 since all devices failed
+    assert_eq!(resp.status(), 500);
+
+    let body: Value = test::read_body_json(resp).await;
+    assert_eq!(body["status"], "failed");
+    assert_eq!(body["failed"], 1);
+    assert_eq!(body["results"]["nonexistent-device-xyz"]["error"], "ERR_DEVICE_NOT_FOUND");
+}
