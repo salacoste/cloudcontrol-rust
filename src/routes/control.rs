@@ -1713,6 +1713,8 @@ pub async fn disconnect_device(
             // Mark device as offline
             match phone_service.offline_connected(&udid).await {
                 Ok(()) => {
+                    // Clear heartbeat session so next heartbeat creates a new connect event
+                    state.heartbeat_sessions.remove(&udid);
                     tracing::info!("[Disconnect] Device {} disconnected manually", udid);
                     HttpResponse::Ok().json(json!({
                         "status": "success",
@@ -1902,6 +1904,75 @@ pub async fn remove_device_tag(
                 "tags": updated_tags
             }))
         }
+        Err(e) => {
+            if e.contains("not found") {
+                HttpResponse::NotFound().json(json!({
+                    "status": "error",
+                    "error": "ERR_DEVICE_NOT_FOUND",
+                    "message": e
+                }))
+            } else {
+                HttpResponse::InternalServerError().json(json!({
+                    "status": "error",
+                    "message": e
+                }))
+            }
+        }
+    }
+}
+
+// ═══════════════ Connection History ═══════════════
+
+/// GET /api/devices/{udid}/history → connection history with session durations
+pub async fn get_connection_history(
+    state: web::Data<AppState>,
+    path: web::Path<String>,
+    query: web::Query<std::collections::HashMap<String, String>>,
+) -> HttpResponse {
+    let udid = path.into_inner();
+    let limit: i64 = query
+        .get("limit")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(100);
+
+    let phone_service = crate::services::phone_service::PhoneService::new(state.db.clone());
+
+    match phone_service.get_connection_history(&udid, limit).await {
+        Ok(history) => HttpResponse::Ok().json(json!({
+            "status": "ok",
+            "history": history
+        })),
+        Err(e) => {
+            if e.contains("not found") {
+                HttpResponse::NotFound().json(json!({
+                    "status": "error",
+                    "error": "ERR_DEVICE_NOT_FOUND",
+                    "message": e
+                }))
+            } else {
+                HttpResponse::InternalServerError().json(json!({
+                    "status": "error",
+                    "message": e
+                }))
+            }
+        }
+    }
+}
+
+/// GET /api/devices/{udid}/stats → connection statistics and uptime
+pub async fn get_connection_stats(
+    state: web::Data<AppState>,
+    path: web::Path<String>,
+) -> HttpResponse {
+    let udid = path.into_inner();
+
+    let phone_service = crate::services::phone_service::PhoneService::new(state.db.clone());
+
+    match phone_service.get_connection_stats(&udid).await {
+        Ok(stats) => HttpResponse::Ok().json(json!({
+            "status": "ok",
+            "stats": stats
+        })),
         Err(e) => {
             if e.contains("not found") {
                 HttpResponse::NotFound().json(json!({

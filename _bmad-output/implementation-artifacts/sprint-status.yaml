@@ -71,11 +71,11 @@ epics:
         priority: P0
       - id: 1b-4-device-tagging-system
         title: "Device Tagging System"
-        status: backlog
+        status: done
         priority: P2
       - id: 1b-5-connection-history-uptime
         title: "Connection History & Uptime"
-        status: backlog
+        status: done
         priority: P2
       - id: 1b-6-manual-device-disconnect
         title: "Manual Device Disconnect"
