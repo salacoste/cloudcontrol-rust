@@ -37,6 +37,7 @@ macro_rules! setup_test_app {
                 .route("/api/devices/add", web::post().to(routes::control::add_device))
                 .route("/api/devices/{udid}", web::delete().to(routes::control::disconnect_device))
                 .route("/api/devices/{udid}/reconnect", web::post().to(routes::control::reconnect_device))
+                .route("/api/screenshot/batch", web::post().to(routes::control::batch_screenshot))
                 .route("/files", web::get().to(routes::control::files))
                 .route("/file/delete/{group}/{filename}", web::get().to(routes::control::file_delete))
                 .route("/nio/stats", web::get().to(routes::nio::nio_stats)),
@@ -493,4 +494,100 @@ async fn test_reconnect_device_no_ip() {
     let body: Value = test::read_body_json(resp).await;
     assert_eq!(body["status"], "error");
     assert!(body["message"].as_str().unwrap().contains("no IP address"));
+}
+
+// ═══════════════ BATCH SCREENSHOT TESTS (Story 2-4) ═══════════════
+
+#[actix_web::test]
+async fn test_batch_screenshot_empty_devices() {
+    let (_tmp, _state, app) = setup_test_app!();
+    let req = test::TestRequest::post()
+        .uri("/api/screenshot/batch")
+        .set_json(json!({"devices": []}))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 400);
+}
+
+#[actix_web::test]
+async fn test_batch_screenshot_single_mock_device() {
+    let (_tmp, state, app) = setup_test_app!();
+    insert_device(&state, "batch-mock-1", true, true).await;
+
+    let req = test::TestRequest::post()
+        .uri("/api/screenshot/batch")
+        .set_json(json!({"devices": ["batch-mock-1"]}))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+
+    let body: Value = test::read_body_json(resp).await;
+    assert_eq!(body["status"], "success");
+    assert_eq!(body["total"], 1);
+    assert_eq!(body["success"], 1);
+    assert_eq!(body["failed"], 0);
+    assert!(body["results"].is_object());
+    assert!(body["results"]["batch-mock-1"]["status"] == "success");
+}
+
+#[actix_web::test]
+async fn test_batch_screenshot_multiple_devices() {
+    let (_tmp, state, app) = setup_test_app!();
+    // Insert 5 mock devices
+    for i in 1..=5 {
+        insert_device(&state, &format!("batch-mock-{}", i), true, true).await;
+    }
+
+    let req = test::TestRequest::post()
+        .uri("/api/screenshot/batch")
+        .set_json(json!({"devices": ["batch-mock-1", "batch-mock-2", "batch-mock-3", "batch-mock-4", "batch-mock-5"]}))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+
+    let body: Value = test::read_body_json(resp).await;
+    assert_eq!(body["status"], "success");
+    assert_eq!(body["total"], 5);
+    assert_eq!(body["success"], 5);
+    assert_eq!(body["failed"], 0);
+}
+
+#[actix_web::test]
+async fn test_batch_screenshot_partial_failure() {
+    let (_tmp, state, app) = setup_test_app!();
+    // Insert 4 mock devices and 1 non-mock (will fail to get screenshot)
+    insert_device(&state, "batch-partial-1", true, true).await;
+    insert_device(&state, "batch-partial-2", true, true).await;
+    insert_device(&state, "batch-partial-3", true, false).await; // Non-mock, will fail
+    insert_device(&state, "batch-partial-4", true, true).await;
+
+    let req = test::TestRequest::post()
+        .uri("/api/screenshot/batch")
+        .set_json(json!({"devices": ["batch-partial-1", "batch-partial-2", "batch-partial-3", "batch-partial-4"]}))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    // Should return 207 Multi-Status for partial success
+    assert_eq!(resp.status(), 207);
+
+    let body: Value = test::read_body_json(resp).await;
+    assert_eq!(body["status"], "partial");
+    assert_eq!(body["total"], 4);
+    assert!(body["success"].as_u64().unwrap() >= 3);
+    assert!(body["failed"].as_u64().unwrap() >= 1);
+}
+
+#[actix_web::test]
+async fn test_batch_screenshot_with_quality_and_scale() {
+    let (_tmp, state, app) = setup_test_app!();
+    insert_device(&state, "batch-quality-1", true, true).await;
+
+    let req = test::TestRequest::post()
+        .uri("/api/screenshot/batch")
+        .set_json(json!({"devices": ["batch-quality-1"], "quality": 50, "scale": 0.5}))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+
+    let body: Value = test::read_body_json(resp).await;
+    assert_eq!(body["status"], "success");
 }

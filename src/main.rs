@@ -127,6 +127,10 @@ async fn main() -> std::io::Result<()> {
                 "/inspector/{udid}/screenshot/img",
                 web::get().to(routes::control::inspector_screenshot_img),
             )
+            .route(
+                "/api/screenshot/batch",
+                web::post().to(routes::control::batch_screenshot),
+            )
             // ── Touch / Input / Keyevent ──
             .route(
                 "/inspector/{udid}/touch",

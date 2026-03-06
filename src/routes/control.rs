@@ -484,6 +484,153 @@ pub async fn inspector_screenshot_img(
     }
 }
 
+// ═══════════════ BATCH SCREENSHOT ═══════════════
+
+use serde::Deserialize;
+use std::collections::HashMap as StdHashMap;
+
+#[derive(Deserialize)]
+pub struct BatchScreenshotRequest {
+    devices: Vec<String>,
+    #[serde(default)]
+    quality: Option<u8>,
+    #[serde(default)]
+    scale: Option<f64>,
+}
+
+/// POST /api/screenshot/batch - capture screenshots from multiple devices concurrently.
+/// Returns HTTP 207 Multi-Status for partial failures.
+pub async fn batch_screenshot(
+    state: web::Data<AppState>,
+    body: web::Json<BatchScreenshotRequest>,
+) -> HttpResponse {
+    let devices = &body.devices;
+
+    if devices.is_empty() {
+        return HttpResponse::BadRequest().json(json!({
+            "status": "error",
+            "message": "No devices specified"
+        }));
+    }
+
+    let quality: u8 = body.quality.unwrap_or(70).max(30).min(95);
+    let scale: f64 = body.scale.unwrap_or(1.0).max(0.25).min(1.0);
+
+    // Capture screenshots concurrently
+    let mut tasks = Vec::new();
+    for udid in devices.clone() {
+        let state_clone = state.clone();
+        let task = async move {
+            let udid = udid.clone();
+            // Get device and client
+            match get_device_client(&state_clone, &udid).await {
+                Ok((device, client)) => {
+                    // Mock device
+                    if device.get("is_mock").and_then(|v| v.as_bool()).unwrap_or(false) {
+                        return (udid, Ok(get_mock_screenshot().to_string()));
+                    }
+
+                    let serial = device.get("serial").and_then(|v| v.as_str()).unwrap_or("");
+                    let is_usb = Adb::is_usb_serial(serial);
+
+                    // Primary: u2 JSON-RPC takeScreenshot
+                    if let Ok(jpeg_bytes) = client.screenshot_scaled(scale, quality).await {
+                        let b64 = base64::engine::general_purpose::STANDARD.encode(&jpeg_bytes);
+                        return (udid, Ok(b64));
+                    }
+
+                    // Fallback 1: USB ADB screencap
+                    if is_usb && !serial.is_empty() {
+                        if let Ok(b64) = DeviceService::screenshot_usb_base64(serial, quality, scale).await {
+                            return (udid, Ok(b64));
+                        }
+                    }
+
+                    // Fallback 2: u2 full screenshot + server-side resize
+                    match DeviceService::screenshot_base64(&client, quality, scale).await {
+                        Ok(b64) => (udid, Ok(b64)),
+                        Err(e) => {
+                            // Final fallback: ADB screencap
+                            if !serial.is_empty() && !is_usb {
+                                if let Ok(png_bytes) = Adb::screencap(serial).await {
+                                    if let Ok(b64) = DeviceService::encode_screenshot(&png_bytes, quality, scale) {
+                                        return (udid, Ok(b64));
+                                    }
+                                }
+                            }
+                            (udid, Err(e))
+                        }
+                    }
+                }
+                Err(_e) => {
+                    // Device lookup failed
+                    (udid, Err("Device not found".to_string()))
+                }
+            }
+        };
+        tasks.push(task);
+    }
+
+    // Execute all tasks concurrently
+    let results: Vec<(String, Result<String, String>)> = futures::future::join_all(tasks).await;
+
+    // Build response
+    let mut response_results: StdHashMap<String, serde_json::Value> = StdHashMap::new();
+    let mut success_count = 0;
+    let mut failure_count = 0;
+
+    for (udid, result) in results {
+        match result {
+            Ok(data) => {
+                response_results.insert(udid.clone(), json!({
+                    "status": "success",
+                    "data": data,
+                    "type": "jpeg"
+                }));
+                success_count += 1;
+            }
+            Err(e) => {
+                let error_code = if e.contains("not found") || e.contains("disconnected") {
+                    "ERR_DEVICE_DISCONNECTED"
+                } else {
+                    "ERR_SCREENSHOT_FAILED"
+                };
+                response_results.insert(udid.clone(), json!({
+                    "status": "error",
+                    "error": error_code,
+                    "message": e
+                }));
+                failure_count += 1;
+            }
+        }
+    }
+
+    // Determine overall status and HTTP status code
+    let overall_status = if failure_count == 0 {
+        "success"
+    } else if success_count == 0 {
+        "failed"
+    } else {
+        "partial"
+    };
+
+    let http_status = if failure_count == 0 {
+        actix_web::http::StatusCode::OK
+    } else if success_count == 0 {
+        actix_web::http::StatusCode::INTERNAL_SERVER_ERROR
+    } else {
+        actix_web::http::StatusCode::MULTI_STATUS
+    };
+
+    HttpResponse::build(http_status).json(json!({
+        "status": overall_status,
+        "total": devices.len(),
+        "success": success_count,
+        "failed": failure_count,
+        "results": response_results
+    }))
+}
+
 // ═══════════════ TOUCH / INPUT / KEYEVENT ═══════════════
 
 /// POST /inspector/{udid}/touch → fire-and-forget
@@ -1159,8 +1306,6 @@ pub async fn wifi_connect(
 }
 
 // ═══════════════ MANUAL DEVICE ADDITION ═══════════════
-
-use serde::Deserialize;
 
 /// Request body for manual device addition
 #[derive(Deserialize)]
