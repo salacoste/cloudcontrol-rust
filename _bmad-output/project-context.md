@@ -225,10 +225,16 @@ img.resize(w, h, image::imageops::FilterType::Nearest)
 tokio::time::sleep(Duration::from_millis(50)).await;
 ```
 
-**Startup Must Clear Devices:**
+**Startup Restores Persisted Devices:**
 ```rust
-phone_service.delete_devices().await.expect("...");
+// Device state persists across restarts
+phone_service.restore_devices().await.expect("...");
 ```
+
+**Corrupted Database Recovery:**
+- Automatic backup with timestamp suffix
+- Fresh database initialization
+- Warning logged about data loss
 
 ---
 

@@ -40,13 +40,13 @@ async fn main() -> std::io::Result<()> {
         .await
         .expect("Failed to initialize database");
 
-    // Clear devices on startup (matches Python behavior)
+    // Restore persisted devices on startup (device state persistence)
     let phone_service = services::phone_service::PhoneService::new(db.clone());
     phone_service
-        .delete_devices()
+        .restore_devices()
         .await
-        .expect("Failed to clear devices");
-    tracing::info!("Database initialized, devices cleared");
+        .expect("Failed to restore devices");
+    tracing::info!("Database initialized, device state restored");
 
     // ── Initialize connection pool ──
     let connection_pool = pool::connection_pool::ConnectionPool::new(
@@ -166,6 +166,11 @@ async fn main() -> std::io::Result<()> {
             .route(
                 "/api/wifi-connect",
                 web::post().to(routes::control::wifi_connect),
+            )
+            // ── Manual Device Addition ──
+            .route(
+                "/api/devices/add",
+                web::post().to(routes::control::add_device),
             )
             // ── Files management ──
             .route("/files", web::get().to(routes::control::files))

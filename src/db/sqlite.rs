@@ -55,10 +55,64 @@ fn column_to_json_key(col: &str) -> &str {
 #[allow(dead_code)]
 impl Database {
     /// Open (or create) the SQLite database and ensure tables exist.
+    /// If the database is corrupted, creates a backup and initializes a fresh one.
     pub async fn new(db_dir: &str, db_name: &str) -> Result<Self, sqlx::Error> {
         let db_path = PathBuf::from(db_dir).join(db_name);
         let db_url = format!("sqlite:{}?mode=rwc", db_path.display());
 
+        // Try to connect to existing database
+        match SqlitePoolOptions::new()
+            .max_connections(10)
+            .connect(&db_url)
+            .await
+        {
+            Ok(pool) => {
+                let db = Database { pool };
+                // Verify database integrity by running ensure_initialized
+                match db.ensure_initialized().await {
+                    Ok(()) => {
+                        tracing::info!("SQLite database initialized: {}", db_path.display());
+                        Ok(db)
+                    }
+                    Err(e) => {
+                        tracing::warn!("Database corrupted, attempting recovery: {}", e);
+                        db.recover_corrupted(&db_path).await
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::warn!("Database connection failed, attempting recovery: {}", e);
+                // Try to recover by backing up and creating fresh
+                Self::recover_from_scratch(&db_path).await
+            }
+        }
+    }
+
+    /// Recover a corrupted database by backing it up and creating a fresh one.
+    async fn recover_corrupted(&self, db_path: &PathBuf) -> Result<Self, sqlx::Error> {
+        let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
+        let backup_path = format!("{}.corrupted.{}", db_path.display(), timestamp);
+
+        tracing::warn!(
+            "Creating backup of corrupted database: {}",
+            backup_path
+        );
+
+        // Try to rename the corrupted file
+        if let Err(e) = std::fs::rename(db_path, &backup_path) {
+            tracing::warn!("Failed to rename corrupted database: {}", e);
+            // Try to delete if rename fails
+            let _ = std::fs::remove_file(db_path);
+        }
+
+        Self::recover_from_scratch(db_path).await
+    }
+
+    /// Create a fresh database after removing corrupted one.
+    async fn recover_from_scratch(db_path: &PathBuf) -> Result<Self, sqlx::Error> {
+        tracing::warn!("Creating fresh database after recovery");
+
+        let db_url = format!("sqlite:{}?mode=rwc", db_path.display());
         let pool = SqlitePoolOptions::new()
             .max_connections(10)
             .connect(&db_url)
@@ -66,7 +120,10 @@ impl Database {
 
         let db = Database { pool };
         db.ensure_initialized().await?;
-        tracing::info!("SQLite database initialized: {}", db_path.display());
+        tracing::info!(
+            "Fresh database created successfully: {}",
+            db_path.display()
+        );
         Ok(db)
     }
 

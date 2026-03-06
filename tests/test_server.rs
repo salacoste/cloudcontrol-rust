@@ -34,6 +34,7 @@ macro_rules! setup_test_app {
                 .route("/heartbeat", web::post().to(routes::control::heartbeat))
                 .route("/shell", web::post().to(routes::control::shell))
                 .route("/api/wifi-connect", web::post().to(routes::control::wifi_connect))
+                .route("/api/devices/add", web::post().to(routes::control::add_device))
                 .route("/files", web::get().to(routes::control::files))
                 .route("/file/delete/{group}/{filename}", web::get().to(routes::control::file_delete))
                 .route("/nio/stats", web::get().to(routes::nio::nio_stats)),
@@ -57,9 +58,10 @@ async fn test_index_page() {
     let (_tmp, _state, app) = setup_test_app!();
     let req = test::TestRequest::get().uri("/").to_request();
     let resp = test::call_service(&app, req).await;
-    assert_eq!(resp.status(), 200);
-    let ct = resp.headers().get("content-type").unwrap().to_str().unwrap();
-    assert!(ct.contains("text/html"));
+    // Index route redirects to /async
+    assert_eq!(resp.status(), 302);
+    let location = resp.headers().get("Location").unwrap().to_str().unwrap();
+    assert_eq!(location, "/async");
 }
 
 #[actix_web::test]
@@ -342,4 +344,54 @@ async fn test_nio_stats() {
 
     let body: Value = test::read_body_json(resp).await;
     assert!(body.is_object());
+}
+
+// ═══════════════ MANUAL DEVICE ADDITION ═══════════════
+
+#[actix_web::test]
+async fn test_add_device_missing_ip() {
+    let (_tmp, _state, app) = setup_test_app!();
+    let req = test::TestRequest::post()
+        .uri("/api/devices/add")
+        .set_json(json!({"ip": "", "port": 9008}))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 400);
+}
+
+#[actix_web::test]
+async fn test_add_device_invalid_ip_format() {
+    let (_tmp, _state, app) = setup_test_app!();
+    let req = test::TestRequest::post()
+        .uri("/api/devices/add")
+        .set_json(json!({"ip": "invalid-ip", "port": 9008}))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 400);
+}
+
+#[actix_web::test]
+async fn test_add_device_unreachable() {
+    let (_tmp, _state, app) = setup_test_app!();
+    // Use a non-routable IP that will fail to connect
+    let req = test::TestRequest::post()
+        .uri("/api/devices/add")
+        .set_json(json!({"ip": "198.51.100.1", "port": 9008}))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    // Should return 503 Service Unavailable for unreachable device
+    assert_eq!(resp.status(), 503);
+}
+
+#[actix_web::test]
+async fn test_add_device_default_port() {
+    let (_tmp, _state, app) = setup_test_app!();
+    // Test that port defaults to 9008 when not specified
+    let req = test::TestRequest::post()
+        .uri("/api/devices/add")
+        .set_json(json!({"ip": "198.51.100.1"}))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    // Should attempt connection (will fail since IP is unreachable)
+    assert_eq!(resp.status(), 503);
 }

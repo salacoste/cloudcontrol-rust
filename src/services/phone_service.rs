@@ -173,11 +173,41 @@ impl PhoneService {
             .map_err(|e| format!("DB query failed: {}", e))
     }
 
-    /// Delete all devices (called on startup).
+    /// Delete all devices (legacy - use restore_devices for persistence).
     pub async fn delete_devices(&self) -> Result<(), String> {
         self.db
             .delete_all_devices()
             .await
             .map_err(|e| format!("DB delete failed: {}", e))
+    }
+
+    /// Restore persisted devices on startup.
+    /// Marks ALL devices as offline initially - discovery services will update status.
+    /// This enables device state to persist across server restarts.
+    pub async fn restore_devices(&self) -> Result<(), String> {
+        // Load ALL devices, not just present=true ones
+        let devices = self
+            .db
+            .find_device_list()
+            .await
+            .map_err(|e| format!("DB query failed: {}", e))?;
+
+        tracing::info!(
+            "[PhoneService] Restoring {} persisted devices...",
+            devices.len()
+        );
+
+        for device in devices {
+            if let Some(udid) = device.get("udid").and_then(|v| v.as_str()) {
+                // Mark as offline initially - discovery services will reconnect
+                let update = serde_json::json!({"present": false});
+                self.db
+                    .update(udid, &update)
+                    .await
+                    .map_err(|e| format!("DB update failed for {}: {}", udid, e))?;
+            }
+        }
+
+        Ok(())
     }
 }

@@ -249,3 +249,41 @@ async fn test_file_pagination() {
     let page3 = db.query_install_file("0", 10, 5).await.unwrap();
     assert_eq!(page3.len(), 2);
 }
+
+#[tokio::test]
+async fn test_corrupted_database_recovery() {
+    use cloudcontrol::db::Database;
+    use std::fs;
+    use tempfile::TempDir;
+
+    let tmp = TempDir::new().unwrap();
+    let db_dir = tmp.path().to_str().unwrap();
+    let db_name = "test_corrupted.db";
+    let db_path = tmp.path().join(db_name);
+
+    // Create a valid database first
+    {
+        let db = Database::new(db_dir, db_name).await.unwrap();
+
+        // Add some data
+        let data = json!({"udid": "test-device", "present": true, "model": "Test"});
+        db.upsert("test-device", &data).await.unwrap();
+    } // Close connection (drop db)
+
+    // Corrupt the database by writing garbage
+    let garbage = b"CORRUPTED_DATABASE_DATA_########";
+    fs::write(&db_path, garbage).unwrap();
+
+    // Database::new should recover and create a fresh database
+    let recovered_db = Database::new(db_dir, db_name).await.unwrap();
+
+    // Fresh database should be empty
+    let devices = recovered_db.find_device_list().await.unwrap();
+    assert_eq!(devices.len(), 0, "Recovered database should be empty");
+
+    // Should be able to insert new data
+    let new_data = json!({"udid": "recovered-device", "present": true});
+    recovered_db.upsert("recovered-device", &new_data).await.unwrap();
+    let found = recovered_db.find_by_udid("recovered-device").await.unwrap();
+    assert!(found.is_some());
+}

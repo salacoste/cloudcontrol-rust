@@ -1158,6 +1158,182 @@ pub async fn wifi_connect(
     }))
 }
 
+// ═══════════════ MANUAL DEVICE ADDITION ═══════════════
+
+use serde::Deserialize;
+
+/// Request body for manual device addition
+#[derive(Deserialize)]
+pub struct ManualDeviceRequest {
+    pub ip: String,
+    #[serde(default = "default_port")]
+    pub port: u16,
+}
+
+fn default_port() -> u16 {
+    9008
+}
+
+/// POST /api/devices/add → manually add a WiFi device by IP:port
+pub async fn add_device(
+    state: web::Data<AppState>,
+    body: web::Json<ManualDeviceRequest>,
+) -> HttpResponse {
+    let ip = body.ip.trim();
+    let port = body.port;
+
+    // Validate IP address format
+    if ip.is_empty() {
+        return HttpResponse::BadRequest().json(json!({
+            "status": "error",
+            "message": "IP address is required"
+        }));
+    }
+
+    // Validate IPv4 format
+    if ip.parse::<std::net::Ipv4Addr>().is_err() {
+        return HttpResponse::BadRequest().json(json!({
+            "status": "error",
+            "message": "Invalid IPv4 address format"
+        }));
+    }
+
+    // Validate port range (already validated by u16, but check for 0)
+    if port == 0 {
+        return HttpResponse::BadRequest().json(json!({
+            "status": "error",
+            "message": "Port must be between 1 and 65535"
+        }));
+    }
+
+    tracing::info!("[AddDevice] Adding device {}:{}", ip, port);
+
+    // Create AtxClient and validate connection
+    let atx_url = format!("http://{}:{}", ip, port);
+    let atx = AtxClient::from_url(&atx_url, &format!("{}:{}", ip, port));
+
+    // Fetch device info with timeout
+    let info = match atx.device_info().await {
+        Ok(i) => i,
+        Err(e) => {
+            tracing::warn!("[AddDevice] Failed to connect to {}:{}", ip, port);
+            return HttpResponse::ServiceUnavailable().json(json!({
+                "status": "error",
+                "message": format!("Device unreachable: {}", e)
+            }));
+        }
+    };
+
+    // Build UDID from device info
+    let ip_fallback = ip.replace('.', "-");
+    let serial = info
+        .get("serial")
+        .and_then(|v| v.as_str())
+        .unwrap_or(&ip_fallback);
+    let hwaddr = info
+        .get("hwaddr")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let model = info
+        .get("productName")
+        .or_else(|| info.get("model"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("Unknown");
+    let brand = info
+        .get("brand")
+        .and_then(|v| v.as_str())
+        .unwrap_or("Unknown");
+    let version = info
+        .get("version")
+        .and_then(|v| v.as_str())
+        .unwrap_or("Unknown");
+    let sdk = info.get("sdk").and_then(|v| v.as_i64()).unwrap_or(30);
+    let display = info.get("display").cloned().unwrap_or(json!({
+        "width": 1080,
+        "height": 1920
+    }));
+    let battery = info.get("battery").cloned().unwrap_or(json!({
+        "level": 0
+    }));
+
+    // Use hwaddr if available, otherwise serial or ip:port
+    let identifier = if !hwaddr.is_empty() {
+        hwaddr.to_string()
+    } else if !serial.is_empty() && serial != ip.replace('.', "-") {
+        serial.to_string()
+    } else {
+        format!("{}:{}", ip, port)
+    };
+
+    let udid = format!("{}-{}", identifier.replace(':', "-"), model.replace(' ', "_"));
+
+    let phone_service = crate::services::phone_service::PhoneService::new(state.db.clone());
+
+    // Check for duplicate device
+    if let Ok(Some(existing)) = phone_service.query_info_by_udid(&udid).await {
+        let is_present = existing
+            .get("present")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        if is_present {
+            return HttpResponse::Conflict().json(json!({
+                "status": "error",
+                "message": "Device already connected",
+                "udid": udid
+            }));
+        }
+        // Device exists but disconnected - allow reconnection
+        tracing::info!("[AddDevice] Reconnecting existing device: {}", udid);
+    }
+
+    // Build device data
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    let device_data = json!({
+        "udid": udid,
+        "serial": serial,
+        "ip": ip,
+        "port": port,
+        "present": true,
+        "ready": true,
+        "using": false,
+        "is_server": false,
+        "model": model,
+        "brand": brand,
+        "version": version,
+        "sdk": sdk,
+        "display": display,
+        "battery": battery,
+        "hwaddr": hwaddr,
+        "agentVersion": info.get("agentVersion").and_then(|v| v.as_str()).unwrap_or("unknown"),
+        "update_time": now,
+    });
+
+    // Register device
+    if let Err(e) = phone_service.update_field(&udid, &device_data).await {
+        return HttpResponse::InternalServerError().json(json!({
+            "status": "error",
+            "message": format!("Failed to register device: {}", e)
+        }));
+    }
+
+    tracing::info!("[AddDevice] Device added successfully: {} ({})", udid, ip);
+
+    HttpResponse::Ok().json(json!({
+        "status": "success",
+        "message": "Device added successfully",
+        "device": {
+            "udid": udid,
+            "ip": ip,
+            "port": port,
+            "model": model,
+            "brand": brand,
+            "version": version,
+            "display": display,
+            "battery": battery
+        }
+    }))
+}
+
 // ═══════════════ FILES ═══════════════
 
 /// GET /files?sort=&page=1 → paginated file list JSON
