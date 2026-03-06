@@ -4,7 +4,7 @@
 
 project: cloudcontrol-rust
 generated_date: 2026-03-05
-last_updated: 2026-03-05
+last_updated: 2026-03-06
 
 # Status Definitions:
 # Epic: backlog → in-progress → done
@@ -110,8 +110,10 @@ epics:
         title: "Screenshot Resizing"
         status: backlog
         priority: P2
+
+  epic-3:
     title: "Remote Device Control"
-    status: backlog
+    status: in-progress
     priority: P0
     phase: MVP
     frs_covered: [FR19, FR20, FR21, FR22, FR23, FR24]
@@ -119,7 +121,7 @@ epics:
     stories:
       - id: 3-1-tap-command-execution
         title: "Tap Command Execution"
-        status: backlog
+        status: done
         priority: P0
       - id: 3-2-swipe-gesture-execution
         title: "Swipe Gesture Execution"
