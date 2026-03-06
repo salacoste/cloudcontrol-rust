@@ -657,3 +657,159 @@ async fn test_batch_screenshot_nonexistent_device() {
     assert_eq!(body["failed"], 1);
     assert_eq!(body["results"]["nonexistent-device-xyz"]["error"], "ERR_DEVICE_NOT_FOUND");
 }
+
+// ═══════════════ TAP / TOUCH ═══════════════
+
+#[actix_web::test]
+async fn test_tap_success_mock_device() {
+    let (_tmp, state, app) = setup_test_app!();
+    insert_device(&state, "tap-mock-1", true, true).await;
+
+    let req = test::TestRequest::post()
+        .uri("/inspector/tap-mock-1/touch")
+        .set_json(json!({"x": 540, "y": 1200}))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+
+    let body: Value = test::read_body_json(resp).await;
+    assert_eq!(body["status"], "ok");
+}
+
+#[actix_web::test]
+async fn test_tap_missing_udid() {
+    let (_tmp, _state, app) = setup_test_app!();
+
+    // Empty UDID in path returns 404 (route not matched) rather than 400
+    // This is expected actix-web behavior for empty path segments
+    let req = test::TestRequest::post()
+        .uri("/inspector//touch")  // Empty UDID
+        .set_json(json!({"x": 540, "y": 1200}))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 404);
+}
+
+#[actix_web::test]
+async fn test_tap_missing_x_coordinate() {
+    let (_tmp, state, app) = setup_test_app!();
+    insert_device(&state, "tap-missing-x", true, true).await;
+
+    let req = test::TestRequest::post()
+        .uri("/inspector/tap-missing-x/touch")
+        .set_json(json!({"y": 1200}))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 400);
+
+    let body: Value = test::read_body_json(resp).await;
+    assert_eq!(body["status"], "error");
+    assert_eq!(body["error"], "ERR_INVALID_REQUEST");
+}
+
+#[actix_web::test]
+async fn test_tap_missing_y_coordinate() {
+    let (_tmp, state, app) = setup_test_app!();
+    insert_device(&state, "tap-missing-y", true, true).await;
+
+    let req = test::TestRequest::post()
+        .uri("/inspector/tap-missing-y/touch")
+        .set_json(json!({"x": 540}))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 400);
+
+    let body: Value = test::read_body_json(resp).await;
+    assert_eq!(body["status"], "error");
+    assert_eq!(body["error"], "ERR_INVALID_REQUEST");
+}
+
+#[actix_web::test]
+async fn test_tap_x_out_of_bounds() {
+    let (_tmp, state, app) = setup_test_app!();
+    insert_device(&state, "tap-oob-x", true, true).await;
+
+    // X coordinate beyond display width (1080)
+    let req = test::TestRequest::post()
+        .uri("/inspector/tap-oob-x/touch")
+        .set_json(json!({"x": 2000, "y": 1200}))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 400);
+
+    let body: Value = test::read_body_json(resp).await;
+    assert_eq!(body["status"], "error");
+    assert_eq!(body["error"], "ERR_INVALID_REQUEST");
+    assert!(body["message"].as_str().unwrap().contains("out of bounds"));
+}
+
+#[actix_web::test]
+async fn test_tap_y_out_of_bounds() {
+    let (_tmp, state, app) = setup_test_app!();
+    insert_device(&state, "tap-oob-y", true, true).await;
+
+    // Y coordinate beyond display height (1920)
+    let req = test::TestRequest::post()
+        .uri("/inspector/tap-oob-y/touch")
+        .set_json(json!({"x": 540, "y": 3000}))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 400);
+
+    let body: Value = test::read_body_json(resp).await;
+    assert_eq!(body["status"], "error");
+    assert_eq!(body["error"], "ERR_INVALID_REQUEST");
+    assert!(body["message"].as_str().unwrap().contains("out of bounds"));
+}
+
+#[actix_web::test]
+async fn test_tap_negative_x() {
+    let (_tmp, state, app) = setup_test_app!();
+    insert_device(&state, "tap-neg-x", true, true).await;
+
+    let req = test::TestRequest::post()
+        .uri("/inspector/tap-neg-x/touch")
+        .set_json(json!({"x": -10, "y": 1200}))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 400);
+
+    let body: Value = test::read_body_json(resp).await;
+    assert_eq!(body["status"], "error");
+    assert_eq!(body["error"], "ERR_INVALID_REQUEST");
+    assert!(body["message"].as_str().unwrap().contains("out of bounds"));
+}
+
+#[actix_web::test]
+async fn test_tap_negative_y() {
+    let (_tmp, state, app) = setup_test_app!();
+    insert_device(&state, "tap-neg-y", true, true).await;
+
+    let req = test::TestRequest::post()
+        .uri("/inspector/tap-neg-y/touch")
+        .set_json(json!({"x": 540, "y": -10}))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 400);
+
+    let body: Value = test::read_body_json(resp).await;
+    assert_eq!(body["status"], "error");
+    assert_eq!(body["error"], "ERR_INVALID_REQUEST");
+    assert!(body["message"].as_str().unwrap().contains("out of bounds"));
+}
+
+#[actix_web::test]
+async fn test_tap_nonexistent_device() {
+    let (_tmp, _state, app) = setup_test_app!();
+
+    let req = test::TestRequest::post()
+        .uri("/inspector/nonexistent-tap-device/touch")
+        .set_json(json!({"x": 540, "y": 1200}))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 404);
+
+    let body: Value = test::read_body_json(resp).await;
+    assert_eq!(body["status"], "error");
+    assert_eq!(body["error"], "ERR_DEVICE_NOT_FOUND");
+}

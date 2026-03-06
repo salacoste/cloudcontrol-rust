@@ -70,8 +70,25 @@ async fn get_device_client(
     let device = phone_service
         .query_info_by_udid(udid)
         .await
-        .map_err(|e| HttpResponse::InternalServerError().json(json!({"status":"error","message":e})))?
-        .ok_or_else(|| HttpResponse::NotFound().json(json!({"status":"error","message":"Device not found"})))?;
+        .map_err(|e| {
+            let error_code = if e.contains("not found") {
+                "ERR_DEVICE_NOT_FOUND"
+            } else if e.contains("disconnected") || e.contains("unreachable") {
+                "ERR_DEVICE_DISCONNECTED"
+            } else {
+                "ERR_DEVICE_QUERY_FAILED"
+            };
+            HttpResponse::InternalServerError().json(json!({
+                "status": "error",
+                "error": error_code,
+                "message": e
+            }))
+        })?
+        .ok_or_else(|| HttpResponse::NotFound().json(json!({
+            "status": "error",
+            "error": "ERR_DEVICE_NOT_FOUND",
+            "message": format!("Device not found: {}", udid)
+        })))?;
 
     state.device_info_cache.insert(udid.to_string(), device.clone()).await;
 
@@ -664,23 +681,55 @@ pub async fn inspector_touch(
 ) -> HttpResponse {
     let udid = path.into_inner();
     if udid.is_empty() {
-        return HttpResponse::BadRequest().finish();
+        return HttpResponse::BadRequest().json(json!({
+            "status": "error",
+            "error": "ERR_INVALID_REQUEST",
+            "message": "Missing device UDID"
+        }));
     }
 
     let action = body.get("action").and_then(|v| v.as_str()).unwrap_or("click");
     let x = match body.get("x").and_then(|v| v.as_f64()) {
         Some(v) => v as i32,
-        None => return HttpResponse::BadRequest().json(json!({"status":"error","message":"Missing coordinates"})),
+        None => return HttpResponse::BadRequest().json(json!({
+            "status": "error",
+            "error": "ERR_INVALID_REQUEST",
+            "message": "Missing x coordinate"
+        })),
     };
     let y = match body.get("y").and_then(|v| v.as_f64()) {
         Some(v) => v as i32,
-        None => return HttpResponse::BadRequest().json(json!({"status":"error","message":"Missing coordinates"})),
+        None => return HttpResponse::BadRequest().json(json!({
+            "status": "error",
+            "error": "ERR_INVALID_REQUEST",
+            "message": "Missing y coordinate"
+        })),
     };
 
     let (device, client) = match get_device_client(&state, &udid).await {
         Ok(v) => v,
         Err(resp) => return resp,
     };
+
+    // Validate coordinates against device display bounds
+    let display = device.get("display").cloned().unwrap_or(json!({"width":1080,"height":1920}));
+    let display_width = display.get("width").and_then(|v| v.as_i64()).unwrap_or(1080) as i32;
+    let display_height = display.get("height").and_then(|v| v.as_i64()).unwrap_or(1920) as i32;
+
+    if x < 0 || x >= display_width {
+        return HttpResponse::BadRequest().json(json!({
+            "status": "error",
+            "error": "ERR_INVALID_REQUEST",
+            "message": format!("X coordinate {} out of bounds. Device resolution: {}x{}", x, display_width, display_height)
+        }));
+    }
+    if y < 0 || y >= display_height {
+        return HttpResponse::BadRequest().json(json!({
+            "status": "error",
+            "error": "ERR_INVALID_REQUEST",
+            "message": format!("Y coordinate {} out of bounds. Device resolution: {}x{}", y, display_width, display_height)
+        }));
+    }
 
     // Mock device
     if device.get("is_mock").and_then(|v| v.as_bool()).unwrap_or(false) {
