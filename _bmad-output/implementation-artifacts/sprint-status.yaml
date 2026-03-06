@@ -125,11 +125,11 @@ epics:
         priority: P0
       - id: 3-2-swipe-gesture-execution
         title: "Swipe Gesture Execution"
-        status: backlog
+        status: done
         priority: P0
       - id: 3-3-text-input-to-device
         title: "Text Input to Device"
-        status: backlog
+        status: done
         priority: P0
       - id: 3-4-physical-key-events
         title: "Physical Key Events"

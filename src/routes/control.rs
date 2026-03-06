@@ -71,18 +71,25 @@ async fn get_device_client(
         .query_info_by_udid(udid)
         .await
         .map_err(|e| {
-            let error_code = if e.contains("not found") {
-                "ERR_DEVICE_NOT_FOUND"
+            if e.contains("not found") {
+                HttpResponse::NotFound().json(json!({
+                    "status": "error",
+                    "error": "ERR_DEVICE_NOT_FOUND",
+                    "message": e
+                }))
             } else if e.contains("disconnected") || e.contains("unreachable") {
-                "ERR_DEVICE_DISCONNECTED"
+                HttpResponse::ServiceUnavailable().json(json!({
+                    "status": "error",
+                    "error": "ERR_DEVICE_DISCONNECTED",
+                    "message": e
+                }))
             } else {
-                "ERR_DEVICE_QUERY_FAILED"
-            };
-            HttpResponse::InternalServerError().json(json!({
-                "status": "error",
-                "error": error_code,
-                "message": e
-            }))
+                HttpResponse::InternalServerError().json(json!({
+                    "status": "error",
+                    "error": "ERR_DEVICE_QUERY_FAILED",
+                    "message": e
+                }))
+            }
         })?
         .ok_or_else(|| HttpResponse::NotFound().json(json!({
             "status": "error",
@@ -673,6 +680,31 @@ pub async fn batch_screenshot(
 
 // ═══════════════ TOUCH / INPUT / KEYEVENT ═══════════════
 
+/// Helper function to resolve swipe pattern to coordinates
+/// Returns (x, y, x2, y2, duration_ms) or None if no pattern
+fn resolve_swipe_pattern(pattern: &str, width: i32, height: i32) -> Option<(i32, i32, i32, i32, i32)> {
+    match pattern {
+        "scroll_up" => {
+            // Bottom-center to top-center
+            Some((width / 2, (height as f64 * 0.8) as i32, width / 2, (height as f64 * 0.2) as i32, 200))
+        }
+        "scroll_down" => {
+            // Top-center to bottom-center
+            Some((width / 2, (height as f64 * 0.2) as i32, width / 2, (height as f64 * 0.8) as i32, 200))
+        }
+        "back" => {
+            // Left edge swipe right (Android back gesture)
+            Some((0, height / 2, (width as f64 * 0.3) as i32, height / 2, 250))
+        }
+        "forward" => {
+            // Right edge swipe left (Android forward gesture)
+            // Start just inside right edge to avoid bounds check
+            Some((width - 1, height / 2, (width as f64 * 0.7) as i32, height / 2, 250))
+        }
+        _ => None,
+    }
+}
+
 /// POST /inspector/{udid}/touch → fire-and-forget
 pub async fn inspector_touch(
     state: web::Data<AppState>,
@@ -689,33 +721,56 @@ pub async fn inspector_touch(
     }
 
     let action = body.get("action").and_then(|v| v.as_str()).unwrap_or("click");
-    let x = match body.get("x").and_then(|v| v.as_f64()) {
-        Some(v) => v as i32,
-        None => return HttpResponse::BadRequest().json(json!({
-            "status": "error",
-            "error": "ERR_INVALID_REQUEST",
-            "message": "Missing x coordinate"
-        })),
-    };
-    let y = match body.get("y").and_then(|v| v.as_f64()) {
-        Some(v) => v as i32,
-        None => return HttpResponse::BadRequest().json(json!({
-            "status": "error",
-            "error": "ERR_INVALID_REQUEST",
-            "message": "Missing y coordinate"
-        })),
-    };
+    let pattern = body.get("pattern").and_then(|v| v.as_str());
 
+    // Get device info first (needed for display dimensions and pattern resolution)
     let (device, client) = match get_device_client(&state, &udid).await {
         Ok(v) => v,
         Err(resp) => return resp,
     };
 
-    // Validate coordinates against device display bounds
+    // Get display dimensions
     let display = device.get("display").cloned().unwrap_or(json!({"width":1080,"height":1920}));
     let display_width = display.get("width").and_then(|v| v.as_i64()).unwrap_or(1080) as i32;
     let display_height = display.get("height").and_then(|v| v.as_i64()).unwrap_or(1920) as i32;
 
+    // Resolve coordinates: pattern-based or explicit
+    let (x, y, x2, y2, duration_ms): (i32, i32, i32, i32, i32) = if action == "swipe" && pattern.is_some() {
+        let pat = pattern.unwrap();
+        match resolve_swipe_pattern(pat, display_width, display_height) {
+            Some(coords) => coords,
+            None => return HttpResponse::BadRequest().json(json!({
+                "status": "error",
+                "error": "ERR_INVALID_REQUEST",
+                "message": format!("Unknown swipe pattern: {}. Available: scroll_up, scroll_down, back, forward", pat)
+            })),
+        }
+    } else {
+        // Explicit coordinates
+        let x = match body.get("x").and_then(|v| v.as_f64()) {
+            Some(v) => v as i32,
+            None => return HttpResponse::BadRequest().json(json!({
+                "status": "error",
+                "error": "ERR_INVALID_REQUEST",
+                "message": "Missing x coordinate"
+            })),
+        };
+        let y = match body.get("y").and_then(|v| v.as_f64()) {
+            Some(v) => v as i32,
+            None => return HttpResponse::BadRequest().json(json!({
+                "status": "error",
+                "error": "ERR_INVALID_REQUEST",
+                "message": "Missing y coordinate"
+            })),
+        };
+        let x2 = body.get("x2").and_then(|v| v.as_f64()).unwrap_or(x as f64) as i32;
+        let y2 = body.get("y2").and_then(|v| v.as_f64()).unwrap_or(y as f64) as i32;
+        let duration_ms = body.get("duration").and_then(|v| v.as_f64()).unwrap_or(200.0) as i32;
+
+        (x, y, x2, y2, duration_ms)
+    };
+
+    // Validate start coordinates (x, y) against device display bounds
     if x < 0 || x >= display_width {
         return HttpResponse::BadRequest().json(json!({
             "status": "error",
@@ -731,6 +786,34 @@ pub async fn inspector_touch(
         }));
     }
 
+    // Swipe-specific validation
+    if action == "swipe" {
+        // Validate duration is positive
+        if duration_ms <= 0 {
+            return HttpResponse::BadRequest().json(json!({
+                "status": "error",
+                "error": "ERR_INVALID_REQUEST",
+                "message": "Duration must be positive"
+            }));
+        }
+
+        // Validate end coordinates (x2, y2) against device display bounds
+        if x2 < 0 || x2 >= display_width {
+            return HttpResponse::BadRequest().json(json!({
+                "status": "error",
+                "error": "ERR_INVALID_REQUEST",
+                "message": format!("X2 coordinate {} out of bounds. Device resolution: {}x{}", x2, display_width, display_height)
+            }));
+        }
+        if y2 < 0 || y2 >= display_height {
+            return HttpResponse::BadRequest().json(json!({
+                "status": "error",
+                "error": "ERR_INVALID_REQUEST",
+                "message": format!("Y2 coordinate {} out of bounds. Device resolution: {}x{}", y2, display_width, display_height)
+            }));
+        }
+    }
+
     // Mock device
     if device.get("is_mock").and_then(|v| v.as_bool()).unwrap_or(false) {
         return HttpResponse::Ok().json(json!({"status": "ok"}));
@@ -738,11 +821,8 @@ pub async fn inspector_touch(
 
     // Fire-and-forget
     let action = action.to_string();
-    let x2 = body.get("x2").and_then(|v| v.as_f64()).unwrap_or(x as f64) as i32;
-    let y2 = body.get("y2").and_then(|v| v.as_f64()).unwrap_or(y as f64) as i32;
-    let duration = body.get("duration").and_then(|v| v.as_f64()).unwrap_or(200.0) / 1000.0;
+    let duration = duration_ms as f64 / 1000.0;
     let serial = device.get("serial").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let duration_ms = (duration * 1000.0) as i32;
 
     tokio::spawn(async move {
         let result = if action == "swipe" {
@@ -776,7 +856,11 @@ pub async fn inspector_input(
 ) -> HttpResponse {
     let udid = path.into_inner();
     if udid.is_empty() {
-        return HttpResponse::BadRequest().finish();
+        return HttpResponse::BadRequest().json(json!({
+            "status": "error",
+            "error": "ERR_INVALID_REQUEST",
+            "message": "UDID cannot be empty"
+        }));
     }
 
     let text = body
@@ -785,8 +869,14 @@ pub async fn inspector_input(
         .unwrap_or("")
         .to_string();
 
+    let clear = body.get("clear").and_then(|v| v.as_bool()).unwrap_or(false);
+
     if text.is_empty() {
-        return HttpResponse::Ok().json(json!({"status": "ok"}));
+        return HttpResponse::BadRequest().json(json!({
+            "status": "error",
+            "error": "ERR_INVALID_REQUEST",
+            "message": "Text cannot be empty"
+        }));
     }
 
     let (device, client) = match get_device_client(&state, &udid).await {
@@ -800,6 +890,38 @@ pub async fn inspector_input(
 
     let serial = device.get("serial").and_then(|v| v.as_str()).unwrap_or("").to_string();
     tokio::spawn(async move {
+        // Clear field first if requested: select all (Ctrl+A) then delete
+        if clear {
+            let mut clear_success = false;
+
+            // Try ATX shell first: Ctrl+A (select all) then Delete
+            // Android Ctrl+A is: keydown CtrlLeft, keydown A, keyup A, keyup CtrlLeft
+            let atx_clear_cmd = "input keyevent --longpress 29"; // Longpress A for select-all behavior
+            if let Err(e) = client.shell_cmd(atx_clear_cmd).await {
+                tracing::warn!("[INPUT] ATX select-all failed for {}: {}", client.udid, e);
+            } else {
+                // Then delete
+                if let Err(e) = client.shell_cmd("input keyevent 67").await { // KEYCODE_DEL
+                    tracing::warn!("[INPUT] ATX delete failed for {}: {}", client.udid, e);
+                } else {
+                    clear_success = true;
+                }
+            }
+
+            // Fallback to ADB if ATX failed and serial is available
+            if !clear_success && !serial.is_empty() {
+                tracing::info!("[INPUT] Trying ADB clear fallback for {}", client.udid);
+                // Use text replacement approach: set text to empty via clipboard
+                // This is more reliable than key events for clearing
+                if let Err(e) = Adb::shell(&serial, "input keyevent KEYCODE_MOVE_END && input keyevent --longpress KEYCODE_DEL").await {
+                    tracing::warn!("[INPUT] ADB clear fallback failed {}: {}", client.udid, e);
+                }
+            }
+
+            // Small delay to ensure clear completes
+            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+        }
+
         if let Err(e) = client.input_text(&text).await {
             tracing::warn!("[INPUT] u2 failed {}: {}, trying ADB fallback", client.udid, e);
             if !serial.is_empty() {
@@ -821,7 +943,11 @@ pub async fn inspector_keyevent(
 ) -> HttpResponse {
     let udid = path.into_inner();
     if udid.is_empty() {
-        return HttpResponse::BadRequest().finish();
+        return HttpResponse::BadRequest().json(json!({
+            "status": "error",
+            "error": "ERR_INVALID_REQUEST",
+            "message": "UDID cannot be empty"
+        }));
     }
 
     let key = body

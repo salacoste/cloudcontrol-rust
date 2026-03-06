@@ -813,3 +813,404 @@ async fn test_tap_nonexistent_device() {
     assert_eq!(body["status"], "error");
     assert_eq!(body["error"], "ERR_DEVICE_NOT_FOUND");
 }
+
+#[actix_web::test]
+async fn test_tap_both_coordinates_out_of_bounds() {
+    let (_tmp, state, app) = setup_test_app!();
+    insert_device(&state, "tap-oob-both", true, true).await;
+
+    // Both X and Y coordinates beyond display bounds (1080x1920)
+    let req = test::TestRequest::post()
+        .uri("/inspector/tap-oob-both/touch")
+        .set_json(json!({"x": 2000, "y": 3000}))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 400);
+
+    let body: Value = test::read_body_json(resp).await;
+    assert_eq!(body["status"], "error");
+    assert_eq!(body["error"], "ERR_INVALID_REQUEST");
+    // X is validated first, so we expect X out of bounds message
+    assert!(body["message"].as_str().unwrap().contains("out of bounds"));
+}
+
+#[actix_web::test]
+async fn test_tap_disconnected_device() {
+    let (_tmp, state, app) = setup_test_app!();
+    // Insert an offline device (present=false) with unreachable IP
+    let data = json!({
+        "udid": "tap-disconnected-1",
+        "ip": "198.51.100.1",  // Non-routable IP
+        "port": 9008,
+        "present": false,
+        "model": "TestPhone",
+        "serial": "",
+        "display": {"width": 1080, "height": 1920}
+    });
+    state.db.upsert("tap-disconnected-1", &data).await.unwrap();
+
+    // Device exists in DB but is marked as not present
+    // The touch endpoint should still work if device info is cached/found
+    // but will fail when trying to connect to unreachable device
+    let req = test::TestRequest::post()
+        .uri("/inspector/tap-disconnected-1/touch")
+        .set_json(json!({"x": 540, "y": 1200}))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    // Device exists in DB, so it returns 200 (fire-and-forget pattern)
+    // The actual connection failure happens asynchronously
+    assert_eq!(resp.status(), 200);
+}
+
+// ═══════════════ SWIPE GESTURE TESTS (Story 3-2) ═══════════════
+
+#[actix_web::test]
+async fn test_swipe_success_mock_device() {
+    let (_tmp, state, app) = setup_test_app!();
+    insert_device(&state, "swipe-mock-1", true, true).await;
+
+    let req = test::TestRequest::post()
+        .uri("/inspector/swipe-mock-1/touch")
+        .set_json(json!({"action": "swipe", "x": 100, "y": 500, "x2": 100, "y2": 200, "duration": 300}))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+
+    let body: Value = test::read_body_json(resp).await;
+    assert_eq!(body["status"], "ok");
+}
+
+#[actix_web::test]
+async fn test_swipe_pattern_scroll_up() {
+    let (_tmp, state, app) = setup_test_app!();
+    insert_device(&state, "swipe-scroll-up", true, true).await;
+
+    let req = test::TestRequest::post()
+        .uri("/inspector/swipe-scroll-up/touch")
+        .set_json(json!({"action": "swipe", "pattern": "scroll_up"}))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+
+    let body: Value = test::read_body_json(resp).await;
+    assert_eq!(body["status"], "ok");
+}
+
+#[actix_web::test]
+async fn test_swipe_pattern_scroll_down() {
+    let (_tmp, state, app) = setup_test_app!();
+    insert_device(&state, "swipe-scroll-down", true, true).await;
+
+    let req = test::TestRequest::post()
+        .uri("/inspector/swipe-scroll-down/touch")
+        .set_json(json!({"action": "swipe", "pattern": "scroll_down"}))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+
+    let body: Value = test::read_body_json(resp).await;
+    assert_eq!(body["status"], "ok");
+}
+
+#[actix_web::test]
+async fn test_swipe_pattern_back() {
+    let (_tmp, state, app) = setup_test_app!();
+    insert_device(&state, "swipe-back", true, true).await;
+
+    let req = test::TestRequest::post()
+        .uri("/inspector/swipe-back/touch")
+        .set_json(json!({"action": "swipe", "pattern": "back"}))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+
+    let body: Value = test::read_body_json(resp).await;
+    assert_eq!(body["status"], "ok");
+}
+
+#[actix_web::test]
+async fn test_swipe_pattern_forward() {
+    let (_tmp, state, app) = setup_test_app!();
+    insert_device(&state, "swipe-forward", true, true).await;
+
+    let req = test::TestRequest::post()
+        .uri("/inspector/swipe-forward/touch")
+        .set_json(json!({"action": "swipe", "pattern": "forward"}))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+
+    let body: Value = test::read_body_json(resp).await;
+    assert_eq!(body["status"], "ok");
+}
+
+#[actix_web::test]
+async fn test_swipe_negative_duration() {
+    let (_tmp, state, app) = setup_test_app!();
+    insert_device(&state, "swipe-neg-duration", true, true).await;
+
+    let req = test::TestRequest::post()
+        .uri("/inspector/swipe-neg-duration/touch")
+        .set_json(json!({"action": "swipe", "x": 100, "y": 500, "x2": 100, "y2": 200, "duration": -100}))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 400);
+
+    let body: Value = test::read_body_json(resp).await;
+    assert_eq!(body["status"], "error");
+    assert_eq!(body["error"], "ERR_INVALID_REQUEST");
+    assert!(body["message"].as_str().unwrap().contains("Duration must be positive"));
+}
+
+#[actix_web::test]
+async fn test_swipe_zero_duration() {
+    let (_tmp, state, app) = setup_test_app!();
+    insert_device(&state, "swipe-zero-duration", true, true).await;
+
+    let req = test::TestRequest::post()
+        .uri("/inspector/swipe-zero-duration/touch")
+        .set_json(json!({"action": "swipe", "x": 100, "y": 500, "x2": 100, "y2": 200, "duration": 0}))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 400);
+
+    let body: Value = test::read_body_json(resp).await;
+    assert_eq!(body["status"], "error");
+    assert_eq!(body["error"], "ERR_INVALID_REQUEST");
+    assert!(body["message"].as_str().unwrap().contains("Duration must be positive"));
+}
+
+#[actix_web::test]
+async fn test_swipe_x2_out_of_bounds() {
+    let (_tmp, state, app) = setup_test_app!();
+    insert_device(&state, "swipe-oob-x2", true, true).await;
+
+    // x2 coordinate beyond display width (1080)
+    let req = test::TestRequest::post()
+        .uri("/inspector/swipe-oob-x2/touch")
+        .set_json(json!({"action": "swipe", "x": 100, "y": 500, "x2": 2000, "y2": 200, "duration": 300}))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 400);
+
+    let body: Value = test::read_body_json(resp).await;
+    assert_eq!(body["status"], "error");
+    assert_eq!(body["error"], "ERR_INVALID_REQUEST");
+    assert!(body["message"].as_str().unwrap().contains("X2 coordinate"));
+}
+
+#[actix_web::test]
+async fn test_swipe_y2_out_of_bounds() {
+    let (_tmp, state, app) = setup_test_app!();
+    insert_device(&state, "swipe-oob-y2", true, true).await;
+
+    // y2 coordinate beyond display height (1920)
+    let req = test::TestRequest::post()
+        .uri("/inspector/swipe-oob-y2/touch")
+        .set_json(json!({"action": "swipe", "x": 100, "y": 500, "x2": 100, "y2": 3000, "duration": 300}))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 400);
+
+    let body: Value = test::read_body_json(resp).await;
+    assert_eq!(body["status"], "error");
+    assert_eq!(body["error"], "ERR_INVALID_REQUEST");
+    assert!(body["message"].as_str().unwrap().contains("Y2 coordinate"));
+}
+
+#[actix_web::test]
+async fn test_swipe_nonexistent_device() {
+    let (_tmp, _state, app) = setup_test_app!();
+
+    let req = test::TestRequest::post()
+        .uri("/inspector/nonexistent-swipe-device/touch")
+        .set_json(json!({"action": "swipe", "x": 100, "y": 500, "x2": 100, "y2": 200, "duration": 300}))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 404);
+
+    let body: Value = test::read_body_json(resp).await;
+    assert_eq!(body["status"], "error");
+    assert_eq!(body["error"], "ERR_DEVICE_NOT_FOUND");
+}
+
+#[actix_web::test]
+async fn test_swipe_invalid_pattern() {
+    let (_tmp, state, app) = setup_test_app!();
+    insert_device(&state, "swipe-invalid-pattern", true, true).await;
+
+    let req = test::TestRequest::post()
+        .uri("/inspector/swipe-invalid-pattern/touch")
+        .set_json(json!({"action": "swipe", "pattern": "invalid_pattern"}))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 400);
+
+    let body: Value = test::read_body_json(resp).await;
+    assert_eq!(body["status"], "error");
+    assert_eq!(body["error"], "ERR_INVALID_REQUEST");
+    assert!(body["message"].as_str().unwrap().contains("Unknown swipe pattern"));
+}
+
+// ============================================================
+// Story 3-3: Text Input Tests
+// ============================================================
+
+#[actix_web::test]
+async fn test_input_success_mock_device() {
+    let (_tmp, state, app) = setup_test_app!();
+    insert_device(&state, "input-test-device", true, true).await;
+
+    let req = test::TestRequest::post()
+        .uri("/inspector/input-test-device/input")
+        .set_json(json!({"text": "hello@example.com"}))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+
+    let body: Value = test::read_body_json(resp).await;
+    assert_eq!(body["status"], "ok");
+}
+
+#[actix_web::test]
+async fn test_input_special_characters() {
+    let (_tmp, state, app) = setup_test_app!();
+    insert_device(&state, "input-special-chars", true, true).await;
+
+    let req = test::TestRequest::post()
+        .uri("/inspector/input-special-chars/input")
+        .set_json(json!({"text": "test@domain.com!#$%&*()"}))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+
+    let body: Value = test::read_body_json(resp).await;
+    assert_eq!(body["status"], "ok");
+}
+
+#[actix_web::test]
+async fn test_input_with_clear() {
+    let (_tmp, state, app) = setup_test_app!();
+    insert_device(&state, "input-clear-test", true, true).await;
+
+    let req = test::TestRequest::post()
+        .uri("/inspector/input-clear-test/input")
+        .set_json(json!({"text": "new text", "clear": true}))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+
+    let body: Value = test::read_body_json(resp).await;
+    assert_eq!(body["status"], "ok");
+}
+
+#[actix_web::test]
+async fn test_input_long_text() {
+    let (_tmp, state, app) = setup_test_app!();
+    insert_device(&state, "input-long-text", true, true).await;
+
+    // 500 character text
+    let long_text = "a".repeat(500);
+    let req = test::TestRequest::post()
+        .uri("/inspector/input-long-text/input")
+        .set_json(json!({"text": long_text}))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+
+    let body: Value = test::read_body_json(resp).await;
+    assert_eq!(body["status"], "ok");
+}
+
+#[actix_web::test]
+async fn test_input_empty_text() {
+    let (_tmp, state, app) = setup_test_app!();
+    insert_device(&state, "input-empty-text", true, true).await;
+
+    let req = test::TestRequest::post()
+        .uri("/inspector/input-empty-text/input")
+        .set_json(json!({"text": ""}))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 400);
+
+    let body: Value = test::read_body_json(resp).await;
+    assert_eq!(body["status"], "error");
+    assert_eq!(body["error"], "ERR_INVALID_REQUEST");
+    assert!(body["message"].as_str().unwrap().contains("Text cannot be empty"));
+}
+
+#[actix_web::test]
+async fn test_input_missing_text() {
+    let (_tmp, state, app) = setup_test_app!();
+    insert_device(&state, "input-missing-text", true, true).await;
+
+    let req = test::TestRequest::post()
+        .uri("/inspector/input-missing-text/input")
+        .set_json(json!({}))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 400);
+
+    let body: Value = test::read_body_json(resp).await;
+    assert_eq!(body["status"], "error");
+    assert_eq!(body["error"], "ERR_INVALID_REQUEST");
+    assert!(body["message"].as_str().unwrap().contains("Text cannot be empty"));
+}
+
+#[actix_web::test]
+async fn test_input_nonexistent_device() {
+    let (_tmp, _state, app) = setup_test_app!();
+
+    let req = test::TestRequest::post()
+        .uri("/inspector/nonexistent-input-device/input")
+        .set_json(json!({"text": "test"}))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 404);
+
+    let body: Value = test::read_body_json(resp).await;
+    assert_eq!(body["status"], "error");
+    assert_eq!(body["error"], "ERR_DEVICE_NOT_FOUND");
+}
+
+#[actix_web::test]
+async fn test_input_disconnected_device() {
+    let (_tmp, state, app) = setup_test_app!();
+    // Insert an offline device (present=false) with unreachable IP
+    let data = json!({
+        "udid": "input-disconnected",
+        "ip": "198.51.100.1",  // Non-routable IP
+        "port": 9008,
+        "present": false,
+        "model": "TestPhone",
+        "serial": "",
+        "display": {"width": 1080, "height": 1920}
+    });
+    state.db.upsert("input-disconnected", &data).await.unwrap();
+
+    // Device exists in DB, so it returns 200 (fire-and-forget pattern)
+    // The actual connection failure happens asynchronously
+    let req = test::TestRequest::post()
+        .uri("/inspector/input-disconnected/input")
+        .set_json(json!({"text": "test"}))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+}
+
+#[actix_web::test]
+async fn test_input_unicode_characters() {
+    let (_tmp, state, app) = setup_test_app!();
+    insert_device(&state, "input-unicode", true, true).await;
+
+    let req = test::TestRequest::post()
+        .uri("/inspector/input-unicode/input")
+        .set_json(json!({"text": "こんにちは世界 🌍"}))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+
+    let body: Value = test::read_body_json(resp).await;
+    assert_eq!(body["status"], "ok");
+}
