@@ -199,8 +199,9 @@ epics:
         completed_date: "2026-03-08"
       - id: 5-3-device-status-and-health-api
         title: "Device Status and Health API"
-        status: backlog
+        status: done
         priority: P2
+        completed_date: "2026-03-08"
       - id: 5-4-ci-cd-integration-examples
         title: "CI/CD Integration Examples"
         status: backlog

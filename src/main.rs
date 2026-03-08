@@ -268,6 +268,10 @@ async fn main() -> std::io::Result<()> {
             .route("/api/v1/batch/swipe", web::post().to(routes::api_v1::batch_swipe))
             .route("/api/v1/batch/input", web::post().to(routes::api_v1::batch_input))
             .route("/api/v1/openapi.json", web::get().to(routes::api_v1::openapi_spec))
+            // ── API V1 Status & Health Endpoints (Story 5-3) ──
+            .route("/api/v1/status", web::get().to(routes::api_v1::get_device_status))
+            .route("/api/v1/health", web::get().to(routes::api_v1::health_check))
+            .route("/api/v1/metrics", web::get().to(routes::api_v1::get_metrics))
             // ── API V1 WebSocket Endpoints ──
             .route(
                 "/api/v1/ws/screenshot/{udid}",

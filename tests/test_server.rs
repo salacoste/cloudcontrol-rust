@@ -69,6 +69,10 @@ macro_rules! setup_test_app {
                 .route("/api/batch/reports", web::get().to(routes::batch_report::list_batch_reports))
                 .route("/api/batch/reports/{id}", web::get().to(routes::batch_report::get_batch_report))
                 .route("/api/batch/reports/{id}", web::delete().to(routes::batch_report::delete_batch_report))
+                // API V1 status & health endpoints (Story 5-3)
+                .route("/api/v1/status", web::get().to(routes::api_v1::get_device_status))
+                .route("/api/v1/health", web::get().to(routes::api_v1::health_check))
+                .route("/api/v1/metrics", web::get().to(routes::api_v1::get_metrics))
                 .route("/files", web::get().to(routes::control::files))
                 .route("/file/delete/{group}/{filename}", web::get().to(routes::control::file_delete))
                 .route("/nio/stats", web::get().to(routes::nio::nio_stats)),
@@ -3189,4 +3193,85 @@ async fn test_delete_batch_report() {
         .to_request();
     let get_resp = test::call_service(&app, get_req).await;
     assert_eq!(get_resp.status(), 404);
+}
+
+// ═══════════════ API V1 STATUS & HEALTH ENDPOINTS (Story 5-3) ═══════════════
+
+#[actix_web::test]
+async fn test_api_v1_status_empty() {
+    let (_tmp, _state, app) = setup_test_app!();
+
+    let req = test::TestRequest::get()
+        .uri("/api/v1/status")
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+
+    let body: Value = test::read_body_json(resp).await;
+    assert_eq!(body["status"], "success");
+    assert_eq!(body["data"]["total"], 0);
+}
+
+#[actix_web::test]
+async fn test_api_v1_status_with_devices() {
+    let (_tmp, state, app) = setup_test_app!();
+
+    // Insert test devices
+    insert_device(&state, "status-device-1", true, true).await;
+    insert_device(&state, "status-device-2", true, true).await;
+
+    let req = test::TestRequest::get()
+        .uri("/api/v1/status")
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+
+    let body: Value = test::read_body_json(resp).await;
+    assert_eq!(body["status"], "success");
+    assert_eq!(body["data"]["total"], 2);
+    assert!(body["data"]["devices"].as_array().unwrap().len() == 2);
+}
+
+#[actix_web::test]
+async fn test_api_v1_health_check() {
+    let (_tmp, _state, app) = setup_test_app!();
+
+    let req = test::TestRequest::get()
+        .uri("/api/v1/health")
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+
+    let body: Value = test::read_body_json(resp).await;
+    assert_eq!(body["status"], "healthy");
+    assert_eq!(body["checks"]["database"], "ok");
+    assert!(body["timestamp"].is_string());
+}
+
+#[actix_web::test]
+async fn test_api_v1_metrics() {
+    let (_tmp, state, app) = setup_test_app!();
+
+    // Insert a device to have some data
+    insert_device(&state, "metrics-device", true, true).await;
+
+    let req = test::TestRequest::get()
+        .uri("/api/v1/metrics")
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+
+    // Check content type is text/plain (Prometheus format)
+    let content_type = resp.headers().get("content-type").unwrap().to_str().unwrap();
+    assert!(content_type.contains("text/plain"));
+
+    let body = test::read_body(resp).await;
+    let body_str = String::from_utf8(body.to_vec()).unwrap();
+
+    // Verify Prometheus format metrics
+    assert!(body_str.contains("# HELP cloudcontrol_connected_devices"));
+    assert!(body_str.contains("# TYPE cloudcontrol_connected_devices gauge"));
+    assert!(body_str.contains("cloudcontrol_connected_devices"));
+    assert!(body_str.contains("cloudcontrol_websocket_connections"));
+    assert!(body_str.contains("cloudcontrol_pool_size"));
 }

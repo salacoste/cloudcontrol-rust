@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 /// Standardized API response wrapper for all /api/v1/* endpoints
 /// Follows NFR20 error response standardization
@@ -168,4 +169,46 @@ pub struct ScreenshotResponse {
     pub image_type: String,
     pub encoding: String,
     pub data: String,
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Device Status & Health API Types (Story 5-3)
+// ═════════════════════════════════════════════════════════════════════════════
+
+/// Device status summary for GET /api/v1/status
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeviceStatusSummary {
+    pub total: usize,
+    #[serde(rename = "byStatus")]
+    pub by_status: HashMap<String, usize>,
+    #[serde(rename = "averageBattery")]
+    pub average_battery: Option<f32>,
+    pub devices: Vec<DeviceStatusEntry>,
+}
+
+/// Individual device status entry
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeviceStatusEntry {
+    pub udid: String,
+    pub model: String,
+    pub status: String,
+    pub battery: i32,
+    #[serde(rename = "lastSeen")]
+    pub last_seen: Option<DateTime<Utc>>,
+}
+
+/// Health check response for GET /api/v1/health
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HealthCheckResponse {
+    pub status: String,  // "healthy" or "unhealthy"
+    pub checks: HashMap<String, String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "poolSize")]
+    pub pool_size: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "maxPoolSize")]
+    pub max_pool_size: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    pub timestamp: DateTime<Utc>,
 }

@@ -4,6 +4,7 @@ use crate::models::api_response::{
     ApiResponse, BatchResponse, BatchResult, DeviceInfo, DeviceInfoResponse,
     ScreenshotResponse, TapRequest, SwipeRequest, InputRequest, KeyEventRequest,
     BatchTapRequest, BatchSwipeRequest, BatchInputRequest, DisplayInfo, ERR_NO_DEVICES_SELECTED,
+    DeviceStatusSummary, DeviceStatusEntry, HealthCheckResponse,
 };
 use crate::services::device_service::DeviceService;
  use crate::state::AppState;
@@ -517,6 +518,190 @@ async fn execute_single_input(
         }
         Err(_) => Err(("ERR_DEVICE_NOT_FOUND".to_string(), format!("Device {} not found", udid))),
     }
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Status & Health Endpoints (Story 5-3)
+// ═════════════════════════════════════════════════════════════════════════════
+
+/// GET /api/v1/status - Get all device statuses summary
+///
+/// Returns summary of all devices with:
+/// - Total count
+/// - Count by status (connected, disconnected, error)
+/// - Average battery level
+/// - List of all devices with status
+pub async fn get_device_status(state: web::Data<AppState>) -> HttpResponse {
+    let phone_service = crate::services::phone_service::PhoneService::new(state.db.clone());
+
+    match phone_service.query_device_list_by_present().await {
+        Ok(devices) => {
+            let mut by_status: HashMap<String, usize> = HashMap::new();
+            let mut total_battery: i64 = 0;
+            let mut battery_count: usize = 0;
+            let mut device_entries: Vec<DeviceStatusEntry> = Vec::new();
+
+            for dev in &devices {
+                let status = dev.get("status")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown")
+                    .to_string();
+
+                *by_status.entry(status.clone()).or_insert(0) += 1;
+
+                let battery = dev.get("battery")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(-1);
+
+                if battery >= 0 {
+                    total_battery += battery;
+                    battery_count += 1;
+                }
+
+                device_entries.push(DeviceStatusEntry {
+                    udid: dev.get("udid").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
+                    model: dev.get("model").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
+                    status,
+                    battery: battery as i32,
+                    last_seen: dev.get("last_seen").and_then(|v| {
+                        v.as_str().and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                    }).map(|dt| chrono::DateTime::<chrono::Utc>::from(dt)),
+                });
+            }
+
+            let average_battery = if battery_count > 0 {
+                Some(total_battery as f32 / battery_count as f32)
+            } else {
+                None
+            };
+
+            let summary = DeviceStatusSummary {
+                total: devices.len(),
+                by_status,
+                average_battery,
+                devices: device_entries,
+            };
+
+            success_response(summary)
+        }
+        Err(e) => error_response("ERR_OPERATION_FAILED", &e),
+    }
+}
+
+/// GET /api/v1/health - Health check for load balancers
+///
+/// Returns HTTP 200 if healthy, HTTP 503 if unhealthy.
+/// Checks: database connectivity, connection pool status.
+/// Target response time: < 50ms
+pub async fn health_check(state: web::Data<AppState>) -> HttpResponse {
+    let mut checks: HashMap<String, String> = HashMap::new();
+    let mut is_healthy = true;
+    let mut error_msg: Option<String> = None;
+
+    // Check database connectivity
+    let db_status = match state.db.query_device_list_by_present().await {
+        Ok(_) => "ok".to_string(),
+        Err(e) => {
+            is_healthy = false;
+            error_msg = Some(format!("Database error: {}", e));
+            "error".to_string()
+        }
+    };
+    checks.insert("database".to_string(), db_status);
+
+    // Check connection pool status
+    let pool_stats = state.connection_pool.stats();
+    let pool_size = pool_stats.get("total").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+    let max_pool_size = pool_stats.get("max_size").and_then(|v| v.as_u64()).unwrap_or(1200) as usize;
+
+    // Pool is unhealthy if at 95%+ capacity
+    let pool_status = if max_pool_size > 0 && pool_size >= (max_pool_size * 95 / 100) {
+        is_healthy = false;
+        error_msg = Some("Connection pool near capacity".to_string());
+        "warning".to_string()
+    } else {
+        "ok".to_string()
+    };
+    checks.insert("connectionPool".to_string(), pool_status);
+
+    let response = HealthCheckResponse {
+        status: if is_healthy { "healthy".to_string() } else { "unhealthy".to_string() },
+        checks,
+        pool_size: Some(pool_size),
+        max_pool_size: Some(max_pool_size),
+        error: error_msg,
+        timestamp: chrono::Utc::now(),
+    };
+
+    if is_healthy {
+        HttpResponse::Ok().json(response)
+    } else {
+        HttpResponse::ServiceUnavailable().json(response)
+    }
+}
+
+/// GET /api/v1/metrics - Prometheus-compatible metrics
+///
+/// Returns metrics in Prometheus text format:
+/// - connected_devices: Number of connected devices
+/// - disconnected_devices: Number of disconnected devices
+/// - error_devices: Number of devices in error state
+/// - websocket_connections: Active WebSocket connections
+/// - pool_size: Current connection pool size
+pub async fn get_metrics(state: web::Data<AppState>) -> HttpResponse {
+    let phone_service = crate::services::phone_service::PhoneService::new(state.db.clone());
+
+    let devices = phone_service.query_device_list_by_present().await.unwrap_or_default();
+
+    // Count by status
+    let mut connected = 0usize;
+    let mut disconnected = 0usize;
+    let mut error_count = 0usize;
+
+    for dev in &devices {
+        let status = dev.get("status").and_then(|v| v.as_str()).unwrap_or("unknown");
+        match status {
+            "connected" | "online" => connected += 1,
+            "disconnected" | "offline" => disconnected += 1,
+            _ => error_count += 1,
+        }
+    }
+
+    // Get pool stats
+    let pool_stats = state.connection_pool.stats();
+    let pool_size = pool_stats.get("total").and_then(|v| v.as_u64()).unwrap_or(0);
+
+    // Count WebSocket connections from heartbeat_sessions
+    let ws_connections = state.heartbeat_sessions.len() as u64;
+
+    // Build Prometheus text format
+    let metrics = format!(
+        r#"# HELP cloudcontrol_connected_devices Number of currently connected devices
+# TYPE cloudcontrol_connected_devices gauge
+cloudcontrol_connected_devices {}
+
+# HELP cloudcontrol_disconnected_devices Number of disconnected devices
+# TYPE cloudcontrol_disconnected_devices gauge
+cloudcontrol_disconnected_devices {}
+
+# HELP cloudcontrol_error_devices Number of devices in error state
+# TYPE cloudcontrol_error_devices gauge
+cloudcontrol_error_devices {}
+
+# HELP cloudcontrol_websocket_connections Active WebSocket connections
+# TYPE cloudcontrol_websocket_connections gauge
+cloudcontrol_websocket_connections {}
+
+# HELP cloudcontrol_pool_size Current connection pool size
+# TYPE cloudcontrol_pool_size gauge
+cloudcontrol_pool_size {}
+"#,
+        connected, disconnected, error_count, ws_connections, pool_size
+    );
+
+    HttpResponse::Ok()
+        .content_type("text/plain; version=0.0.4")
+        .body(metrics)
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
