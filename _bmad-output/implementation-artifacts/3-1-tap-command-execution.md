@@ -1,6 +1,6 @@
 # Story 3.1: Tap Command Execution
 
-Status: ready-for-dev
+Status: done
 
 ## Story
 
@@ -36,25 +36,25 @@ As a **QA Engineer**, I want to execute tap commands on connected devices, so th
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Add coordinate bounds validation (AC: 2)
-  - [ ] Fetch device display info (width, height) before tap execution
-  - [ ] Validate x coordinate is within [0, display_width)
-  - [ ] Validate y coordinate is within [0, display_height)
-  - [ ] Return HTTP 400 with ERR_INVALID_REQUEST for out-of-bounds coordinates
+- [x] Task 1: Add coordinate bounds validation (AC: 2)
+  - [x] Fetch device display info (width, height) before tap execution
+  - [x] Validate x coordinate is within [0, display_width)
+  - [x] Validate y coordinate is within [0, display_height)
+  - [x] Return HTTP 400 with ERR_INVALID_REQUEST for out-of-bounds coordinates
 
-- [ ] Task 2: Improve error handling for device states (AC: 3, 4)
-  - [ ] Return HTTP 404 for device not found (currently returns 500)
-  - [ ] Return HTTP 503 for disconnected/unreachable devices
-  - [ ] Include appropriate error codes in response
+- [x] Task 2: Improve error handling for device states (AC: 3, 4)
+  - [x] Return HTTP 404 for device not found (currently returns 500)
+  - [x] Return HTTP 503 for disconnected/unreachable devices
+  - [x] Include appropriate error codes in response
 
-- [ ] Task 3: Add E2E tests
-  - [ ] Test successful tap execution with valid coordinates
-  - [ ] Test tap with x coordinate out of bounds
-  - [ ] Test tap with y coordinate out of bounds
-  - [ ] Test tap with both coordinates out of bounds
-  - [ ] Test tap with negative coordinates
-  - [ ] Test tap on nonexistent device
-  - [ ] Test tap on disconnected device
+- [x] Task 3: Add E2E tests
+  - [x] Test successful tap execution with valid coordinates
+  - [x] Test tap with x coordinate out of bounds
+  - [x] Test tap with y coordinate out of bounds
+  - [x] Test tap with both coordinates out of bounds
+  - [x] Test tap with negative coordinates
+  - [x] Test tap on nonexistent device
+  - [x] Test tap on disconnected device
 
 ## Dev Notes
 
@@ -167,16 +167,24 @@ Response (503 Service Unavailable):
 
 ### Agent Model Used
 
-(To be filled during implementation)
+Claude Opus 4.6 (claude-opus-4-6)
 
 ### Debug Log References
 
-(To be filled during implementation)
+- Initial implementation completed with coordinate bounds validation
+- Code review identified HTTP status code issue (500 vs 503 for disconnected devices)
+- Fixed error handling to return correct status codes (404, 503)
 
 ### Completion Notes List
 
-(To be filled during implementation)
+- AC1 (Execute tap at coordinates): ✅ Implemented via `inspector_touch` handler with fire-and-forget pattern
+- AC2 (Validate coordinates within screen bounds): ✅ Validates x/y against device display dimensions, returns 400 with ERR_INVALID_REQUEST
+- AC3 (Handle device not found): ✅ Returns HTTP 404 with ERR_DEVICE_NOT_FOUND
+- AC4 (Handle disconnected device): ✅ Returns HTTP 503 with ERR_DEVICE_DISCONNECTED
+- All 11 E2E tests passing covering all acceptance criteria
+- Fire-and-forget pattern used for tap execution to meet <100ms response time requirement
 
 ### File List
 
-(To be filled during implementation)
+- `src/routes/control.rs` - Modified `inspector_touch` handler with coordinate bounds validation (lines 714-732), fixed `get_device_client` error handling (lines 73-91)
+- `tests/test_server.rs` - Added 11 E2E tests for tap endpoint (test_tap_success_mock_device, test_tap_missing_udid, test_tap_missing_x_coordinate, test_tap_missing_y_coordinate, test_tap_x_out_of_bounds, test_tap_y_out_of_bounds, test_tap_negative_x, test_tap_negative_y, test_tap_nonexistent_device, test_tap_both_coordinates_out_of_bounds, test_tap_disconnected_device)

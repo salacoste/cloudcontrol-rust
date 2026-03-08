@@ -4,7 +4,7 @@
 
 project: cloudcontrol-rust
 generated_date: 2026-03-05
-last_updated: 2026-03-06
+last_updated: 2026-03-08
 
 # Status Definitions:
 # Epic: backlog → in-progress → done
@@ -19,7 +19,7 @@ last_updated: 2026-03-06
 epics:
   epic-1a:
     title: "Device Connection & Discovery"
-    status: backlog
+    status: done
     priority: P0
     phase: MVP
     frs_covered: [FR1, FR2, FR3, FR4, FR5, FR6]
@@ -51,7 +51,7 @@ epics:
 
   epic-1b:
     title: "Device Dashboard & Management"
-    status: backlog
+    status: done
     priority: P0
     phase: MVP
     frs_covered: [FR7, FR8, FR9, FR10, FR11, FR12]
@@ -84,7 +84,7 @@ epics:
 
   epic-2:
     title: "Real-Time Visual Monitoring"
-    status: backlog
+    status: done
     priority: P0
     phase: MVP
     frs_covered: [FR13, FR14, FR15, FR16, FR17, FR18]
@@ -108,12 +108,12 @@ epics:
         priority: P1
       - id: 2-5-screenshot-resizing
         title: "Screenshot Resizing"
-        status: backlog
+        status: done
         priority: P2
 
   epic-3:
     title: "Remote Device Control"
-    status: in-progress
+    status: done
     priority: P0
     phase: MVP
     frs_covered: [FR19, FR20, FR21, FR22, FR23, FR24]
@@ -137,16 +137,16 @@ epics:
         priority: P1
       - id: 3-5-ui-hierarchy-inspector
         title: "UI Hierarchy Inspector"
-        status: backlog
+        status: done
         priority: P2
       - id: 3-6-shell-command-execution
         title: "Shell Command Execution"
-        status: backlog
+        status: done
         priority: P1
 
   epic-4:
     title: "Multi-Device Batch Operations"
-    status: backlog
+    status: done
     priority: P1
     phase: MVP
     frs_covered: [FR25, FR26, FR27, FR28, FR29]
@@ -154,32 +154,34 @@ epics:
     stories:
       - id: 4-1-multi-device-selection-ui
         title: "Multi-Device Selection UI"
-        status: backlog
+        status: done
         priority: P1
+        code_review: passed
       - id: 4-2-synchronized-batch-operations
         title: "Synchronized Batch Operations"
-        status: backlog
+        status: done
         priority: P1
+        code_review: passed
       - id: 4-3-action-recording-system
         title: "Action Recording System"
-        status: backlog
+        status: done
         priority: P2
       - id: 4-4-recording-session-management
         title: "Recording Session Management"
-        status: backlog
+        status: done
         priority: P2
       - id: 4-5-recording-playback
         title: "Recording Playback"
-        status: backlog
+        status: done
         priority: P2
       - id: 4-6-batch-test-report-export
         title: "Batch Test Report Export"
-        status: backlog
+        status: done
         priority: P2
 
   epic-5:
     title: "External API & CI/CD Integration"
-    status: backlog
+    status: in-progress
     priority: P2
     phase: Growth
     frs_covered: [FR30, FR31, FR32, FR33, FR34]
@@ -187,12 +189,14 @@ epics:
     stories:
       - id: 5-1-rest-api-device-operations
         title: "REST API Device Operations"
-        status: backlog
+        status: done
         priority: P2
+        completed_date: "2026-03-08"
       - id: 5-2-websocket-screenshot-streaming-api
         title: "WebSocket Screenshot Streaming API"
-        status: backlog
+        status: done
         priority: P2
+        completed_date: "2026-03-08"
       - id: 5-3-device-status-and-health-api
         title: "Device Status and Health API"
         status: backlog

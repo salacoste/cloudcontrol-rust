@@ -386,6 +386,17 @@
         <button class="term-btn" v-if="selectedDevices.length > 0" @click="openGroupControl">
           GROUP CONTROL [${ selectedDevices.length }]
         </button>
+        <!-- Recording Controls -->
+        <button class="term-btn" v-if="!isRecording && selectedDevices.length === 1" @click="startRecording">
+          ⏺ START RECORDING
+        </button>
+        <button class="term-btn term-btn-danger" v-if="isRecording" @click="stopRecording">
+          ⏹ STOP RECORDING
+        </button>
+        <span v-if="isRecording" class="term-recording-indicator">
+          <span class="term-rec-dot"></span>
+          RECORDING [${ recordingActionCount } actions]
+        </span>
       </div>
 
       <!-- WiFi Connect Modal -->
@@ -459,7 +470,7 @@
              :key="device.udid"
              class="term-device-card"
              :class="{offline: !device.present, selected: isSelected(device)}"
-             @click="toggleSelect(device)">
+             @click="toggleSelect(device, $event)">
 
           <!-- Device Preview -->
           <div class="term-device-preview">
@@ -551,6 +562,7 @@
       data: {
         devices: [],
         selectedDevices: [],
+        lastClickedIndex: -1,  // Track last clicked device for range selection
         searchQuery: '',
         wsConnected: false,
         startTime: Date.now(),
@@ -562,7 +574,12 @@
         wifiAddress: '',
         wifiConnecting: false,
         wifiStatus: '',
-        wifiStatusType: 'info'
+        wifiStatusType: 'info',
+        // Recording state
+        isRecording: false,
+        recordingId: null,
+        recordingDeviceUdid: null,
+        recordingActionCount: 0
       },
       computed: {
         onlineDevices: function() {
@@ -587,6 +604,11 @@
         this.startUptimeTimer();
         this.addLog('info', 'Terminal interface initialized');
         this.startAutoRefresh();
+        // Add keyboard event listeners for Ctrl+A and Escape
+        document.addEventListener('keydown', this.handleKeydown);
+      },
+      beforeDestroy: function() {
+        document.removeEventListener('keydown', this.handleKeydown);
       },
       methods: {
         loadDevices: function() {
@@ -630,12 +652,49 @@
         isSelected: function(device) {
           return this.selectedDevices.indexOf(device.udid) > -1;
         },
-        toggleSelect: function(device) {
+        toggleSelect: function(device, event) {
+          var clickedIndex = this.filteredDevices.indexOf(device);
+
+          // Shift+click for range selection
+          if (event && event.shiftKey && this.lastClickedIndex >= 0) {
+            var start = Math.min(this.lastClickedIndex, clickedIndex);
+            var end = Math.max(this.lastClickedIndex, clickedIndex);
+
+            // Add all devices in range to selection
+            for (var i = start; i <= end; i++) {
+              var udid = this.filteredDevices[i].udid;
+              if (this.selectedDevices.indexOf(udid) === -1) {
+                this.selectedDevices.push(udid);
+              }
+            }
+            // Don't update lastClickedIndex for shift+click
+            return;
+          }
+
+          // Ctrl+click or regular click: toggle selection
           var idx = this.selectedDevices.indexOf(device.udid);
           if (idx > -1) {
             this.selectedDevices.splice(idx, 1);
           } else {
             this.selectedDevices.push(device.udid);
+          }
+
+          // Update last clicked index for future range selection
+          this.lastClickedIndex = clickedIndex;
+        },
+        handleKeydown: function(event) {
+          // Ctrl+A: Select all devices
+          if (event.ctrlKey && event.key === 'a') {
+            // Only handle if not in an input field
+            if (event.target.tagName !== 'INPUT' && event.target.tagName !== 'TEXTAREA') {
+              event.preventDefault();
+              this.selectAll();
+            }
+          }
+
+          // Escape: Clear selection
+          if (event.key === 'Escape') {
+            this.deselectAll();
           }
         },
         selectAll: function() {
@@ -668,6 +727,61 @@
           form.appendChild(input);
           document.body.appendChild(form);
           form.submit();
+        },
+        // Recording methods
+        startRecording: function() {
+          var self = this;
+          if (this.selectedDevices.length !== 1) {
+            this.addLog('error', 'Select exactly one device to start recording');
+            return;
+          }
+          var udid = this.selectedDevices[0];
+          fetch('/api/recordings/start', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ device_udid: udid, name: 'Recording ' + new Date().toISOString().slice(0, 19) })
+          })
+          .then(function(r) { return r.json(); })
+          .then(function(data) {
+            if (data.status === 'success') {
+              self.isRecording = true;
+              self.recordingId = data.recording_id;
+              self.recordingDeviceUdid = udid;
+              self.recordingActionCount = 0;
+              self.addLog('info', 'Recording started: ID ' + data.recording_id);
+            } else {
+              self.addLog('error', 'Failed to start recording: ' + data.message);
+            }
+          })
+          .catch(function(err) {
+            self.addLog('error', 'Recording start error: ' + err.message);
+          });
+        },
+        stopRecording: function() {
+          var self = this;
+          if (!this.recordingId) return;
+          var name = prompt('Enter recording name:', 'Recording ' + new Date().toISOString().slice(0, 10));
+          if (!name) return;
+          fetch('/api/recordings/' + this.recordingId + '/stop', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: name })
+          })
+          .then(function(r) { return r.json(); })
+          .then(function(data) {
+            if (data.status === 'success') {
+              self.addLog('info', 'Recording saved: ' + name + ' (' + self.recordingActionCount + ' actions)');
+              self.isRecording = false;
+              self.recordingId = null;
+              self.recordingDeviceUdid = null;
+              self.recordingActionCount = 0;
+            } else {
+              self.addLog('error', 'Failed to stop recording: ' + data.message);
+            }
+          })
+          .catch(function(err) {
+            self.addLog('error', 'Recording stop error: ' + err.message);
+          });
         },
         rebootDevice: function(device) {
           if (confirm('Reboot ' + device.model + '?')) {

@@ -10,6 +10,13 @@ pub struct Database {
     pool: SqlitePool,
 }
 
+impl Database {
+    /// Get a clone of the underlying SQLite pool.
+    pub fn get_pool(&self) -> SqlitePool {
+        self.pool.clone()
+    }
+}
+
 /// MongoDB→SQLite field mapping (service layer key → DB column name)
 const FIELD_MAPPING: &[(&str, &str)] = &[
     ("udid", "udid"),
@@ -218,6 +225,55 @@ impl Database {
         let _ = sqlx::query("ALTER TABLE devices ADD COLUMN tags TEXT DEFAULT '[]'")
             .execute(&self.pool)
             .await;
+
+        // Recording sessions table
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS recordings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                device_udid TEXT NOT NULL,
+                action_count INTEGER DEFAULT 0,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            )
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        // Recorded actions table
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS recorded_actions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                recording_id INTEGER NOT NULL,
+                action_type TEXT NOT NULL,
+                x INTEGER,
+                y INTEGER,
+                x2 INTEGER,
+                y2 INTEGER,
+                duration_ms INTEGER,
+                text TEXT,
+                key_code INTEGER,
+                sequence_order INTEGER NOT NULL,
+                created_at INTEGER NOT NULL,
+                FOREIGN KEY (recording_id) REFERENCES recordings(id) ON DELETE CASCADE
+            )
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_recordings_device ON recordings(device_udid)")
+            .execute(&self.pool)
+            .await?;
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_recordings_created ON recordings(created_at)")
+            .execute(&self.pool)
+            .await?;
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_actions_recording ON recorded_actions(recording_id)")
+            .execute(&self.pool)
+            .await?;
 
         Ok(())
     }
@@ -887,6 +943,230 @@ impl Database {
             .execute(&self.pool)
             .await?;
         Ok(())
+    }
+
+    // ─── Recording Operations ───
+
+    /// Create a new recording session.
+    pub async fn create_recording(
+        &self,
+        name: &str,
+        device_udid: &str,
+    ) -> Result<i64, sqlx::Error> {
+        let now = chrono::Utc::now().timestamp();
+        let result = sqlx::query(
+            "INSERT INTO recordings (name, device_udid, action_count, created_at, updated_at) VALUES (?1, ?2, 1, ?3, ?3)"
+        )
+        .bind(name)
+        .bind(device_udid)
+        .bind(now)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(result.last_insert_rowid())
+    }
+
+    /// Get a recording by ID.
+    pub async fn get_recording(&self, id: i64) -> Result<Option<Value>, sqlx::Error> {
+        let row = sqlx::query(
+            "SELECT id, name, device_udid, action_count, created_at, updated_at FROM recordings WHERE id = ?1"
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row.as_ref().map(Self::recording_row_to_json))
+    }
+
+    /// List all recordings, optionally filtered by device.
+    pub async fn list_recordings(&self, device_udid: Option<&str>) -> Result<Vec<Value>, sqlx::Error> {
+        let rows = if let Some(udid) = device_udid {
+            sqlx::query(
+                "SELECT id, name, device_udid, action_count, created_at, updated_at FROM recordings WHERE device_udid = ?1 ORDER BY created_at DESC"
+            )
+            .bind(udid)
+            .fetch_all(&self.pool)
+            .await?
+        } else {
+            sqlx::query(
+                "SELECT id, name, device_udid, action_count, created_at, updated_at FROM recordings ORDER BY created_at DESC"
+            )
+            .fetch_all(&self.pool)
+            .await?
+        };
+
+        Ok(rows.iter().map(Self::recording_row_to_json).collect())
+    }
+
+    /// Delete a recording and all its actions.
+    pub async fn delete_recording(&self, id: i64) -> Result<bool, sqlx::Error> {
+        let result = sqlx::query("DELETE FROM recordings WHERE id = ?1")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+
+        Ok(result.rows_affected() > 0)
+    }
+
+    /// Add an action to a recording.
+    pub async fn add_recorded_action(
+        &self,
+        recording_id: i64,
+        action_type: &str,
+        x: Option<i32>,
+        y: Option<i32>,
+        x2: Option<i32>,
+        y2: Option<i32>,
+        duration_ms: Option<i32>,
+        text: Option<&str>,
+        key_code: Option<i32>,
+    ) -> Result<(i64, i32), sqlx::Error> {
+        let now = chrono::Utc::now().timestamp();
+
+        // Get next sequence order
+        let max_order: i32 = sqlx::query_scalar(
+            "SELECT COALESCE(MAX(sequence_order), 0) FROM recorded_actions WHERE recording_id = ?1"
+        )
+        .bind(recording_id)
+        .fetch_one(&self.pool)
+        .await?;
+
+        let sequence_order = max_order + 1;
+
+        let result = sqlx::query(
+            r#"
+            INSERT INTO recorded_actions
+            (recording_id, action_type, x, y, x2, y2, duration_ms, text, key_code, sequence_order, created_at)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+            "#
+        )
+        .bind(recording_id)
+        .bind(action_type)
+        .bind(x)
+        .bind(y)
+        .bind(x2)
+        .bind(y2)
+        .bind(duration_ms)
+        .bind(text)
+        .bind(key_code)
+        .bind(sequence_order)
+        .bind(now)
+        .execute(&self.pool)
+        .await?;
+
+        let action_id = result.last_insert_rowid();
+
+        // Update recording action count and updated_at
+        sqlx::query(
+            "UPDATE recordings SET action_count = action_count + 1, updated_at = ?1 WHERE id = ?2"
+        )
+        .bind(now)
+        .bind(recording_id)
+        .execute(&self.pool)
+        .await?;
+
+        Ok((action_id, sequence_order))
+    }
+
+    /// Get all actions for a recording.
+    pub async fn get_recording_actions(&self, recording_id: i64) -> Result<Vec<Value>, sqlx::Error> {
+        let rows = sqlx::query(
+            r#"
+            SELECT id, recording_id, action_type, x, y, x2, y2, duration_ms, text, key_code, sequence_order, created_at
+            FROM recorded_actions
+            WHERE recording_id = ?1
+            ORDER BY sequence_order ASC
+            "#
+        )
+        .bind(recording_id)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows.iter().map(Self::action_row_to_json).collect())
+    }
+
+    /// Get a recording with all its actions.
+    pub async fn get_recording_with_actions(&self, id: i64) -> Result<Option<Value>, sqlx::Error> {
+        let recording = self.get_recording(id).await?;
+        if recording.is_none() {
+            return Ok(None);
+        }
+
+        let recording = recording.unwrap();
+        let actions = self.get_recording_actions(id).await?;
+
+        let mut result = recording.clone();
+        if let Some(obj) = result.as_object_mut() {
+            obj.insert("actions".to_string(), Value::Array(actions));
+        }
+
+        Ok(Some(result))
+    }
+
+    /// Convert a recording row to JSON.
+    fn recording_row_to_json(row: &SqliteRow) -> Value {
+        let id: i64 = row.get("id");
+        let name: String = row.get("name");
+        let device_udid: String = row.get("device_udid");
+        let action_count: i32 = row.get("action_count");
+        let created_at: i64 = row.get("created_at");
+        let updated_at: i64 = row.get("updated_at");
+
+        json!({
+            "id": id,
+            "name": name,
+            "device_udid": device_udid,
+            "action_count": action_count,
+            "createdAt": created_at,
+            "updatedAt": updated_at
+        })
+    }
+
+    /// Convert an action row to JSON.
+    fn action_row_to_json(row: &SqliteRow) -> Value {
+        let id: i64 = row.get("id");
+        let recording_id: i64 = row.get("recording_id");
+        let action_type: String = row.get("action_type");
+        let x: Option<i32> = row.get("x");
+        let y: Option<i32> = row.get("y");
+        let x2: Option<i32> = row.get("x2");
+        let y2: Option<i32> = row.get("y2");
+        let duration_ms: Option<i32> = row.get("duration_ms");
+        let text: Option<String> = row.get("text");
+        let key_code: Option<i32> = row.get("key_code");
+        let sequence_order: i32 = row.get("sequence_order");
+        let created_at: i64 = row.get("created_at");
+
+        let mut obj = serde_json::Map::new();
+        obj.insert("id".to_string(), json!(id));
+        obj.insert("recording_id".to_string(), json!(recording_id));
+        obj.insert("action_type".to_string(), json!(action_type));
+        obj.insert("sequence_order".to_string(), json!(sequence_order));
+        obj.insert("created_at".to_string(), json!(created_at));
+
+        if let Some(v) = x {
+            obj.insert("x".to_string(), json!(v));
+        }
+        if let Some(v) = y {
+            obj.insert("y".to_string(), json!(v));
+        }
+        if let Some(v) = x2 {
+            obj.insert("x2".to_string(), json!(v));
+        }
+        if let Some(v) = y2 {
+            obj.insert("y2".to_string(), json!(v));
+        }
+        if let Some(v) = duration_ms {
+            obj.insert("duration_ms".to_string(), json!(v));
+        }
+        if let Some(v) = text {
+            obj.insert("text".to_string(), json!(v));
+        }
+        if let Some(v) = key_code {
+            obj.insert("key_code".to_string(), json!(v));
+        }
+
+        Value::Object(obj)
     }
 }
 

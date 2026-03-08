@@ -131,6 +131,19 @@ async fn main() -> std::io::Result<()> {
                 "/api/screenshot/batch",
                 web::post().to(routes::control::batch_screenshot),
             )
+            // ── Batch Control Operations ──
+            .route(
+                "/api/batch/tap",
+                web::post().to(routes::control::batch_tap),
+            )
+            .route(
+                "/api/batch/swipe",
+                web::post().to(routes::control::batch_swipe),
+            )
+            .route(
+                "/api/batch/input",
+                web::post().to(routes::control::batch_input),
+            )
             // ── Touch / Input / Keyevent ──
             .route(
                 "/inspector/{udid}/touch",
@@ -202,6 +215,118 @@ async fn main() -> std::io::Result<()> {
             .route(
                 "/api/devices/{udid}/stats",
                 web::get().to(routes::control::get_connection_stats),
+            )
+            // ── Recording System ──
+            .route(
+                "/api/recordings/start",
+                web::post().to(routes::recording::start_recording),
+            )
+            .route(
+                "/api/recordings/{id}/action",
+                web::post().to(routes::recording::record_action),
+            )
+            .route(
+                "/api/recordings/{id}/stop",
+                web::post().to(routes::recording::stop_recording),
+            )
+            .route(
+                "/api/recordings/{id}/pause",
+                web::post().to(routes::recording::pause_recording),
+            )
+            .route(
+                "/api/recordings/{id}/resume",
+                web::post().to(routes::recording::resume_recording),
+            )
+            .route(
+                "/api/recordings/{id}/cancel",
+                web::post().to(routes::recording::cancel_recording),
+            )
+            .route(
+                "/api/recordings/{id}/status",
+                web::get().to(routes::recording::get_recording_status),
+            )
+            .route(
+                "/api/recordings/{id}/actions/{action_id}",
+                web::delete().to(routes::recording::delete_action),
+            )
+            .route(
+                "/api/recordings/{id}/actions/{action_id}",
+                web::put().to(routes::recording::edit_action),
+            )
+            .route("/api/recordings", web::get().to(routes::recording::list_recordings))
+            .route("/api/recordings/{id}", web::get().to(routes::recording::get_recording))
+            .route("/api/recordings/{id}", web::delete().to(routes::recording::delete_recording))
+            // ── API V1 Endpoints ──
+            .route("/api/v1/devices", web::get().to(routes::api_v1::list_devices))
+            .route("/api/v1/devices/{udid}", web::get().to(routes::api_v1::get_device))
+            .route("/api/v1/devices/{udid}/screenshot", web::get().to(routes::api_v1::get_screenshot))
+            .route("/api/v1/devices/{udid}/tap", web::post().to(routes::api_v1::tap))
+            .route("/api/v1/devices/{udid}/swipe", web::post().to(routes::api_v1::swipe))
+            .route("/api/v1/devices/{udid}/input", web::post().to(routes::api_v1::input))
+            .route("/api/v1/devices/{udid}/keyevent", web::post().to(routes::api_v1::keyevent))
+            .route("/api/v1/batch/tap", web::post().to(routes::api_v1::batch_tap))
+            .route("/api/v1/batch/swipe", web::post().to(routes::api_v1::batch_swipe))
+            .route("/api/v1/batch/input", web::post().to(routes::api_v1::batch_input))
+            .route("/api/v1/openapi.json", web::get().to(routes::api_v1::openapi_spec))
+            // ── API V1 WebSocket Endpoints ──
+            .route(
+                "/api/v1/ws/screenshot/{udid}",
+                web::get().to(routes::api_v1::ws_screenshot),
+            )
+            .route(
+                "/api/recordings/{id}/actions/{action_id}",
+                web::delete().to(routes::recording::delete_action),
+            )
+            .route(
+                "/api/recordings",
+                web::get().to(routes::recording::list_recordings),
+            )
+            .route(
+                "/api/recordings/{id}",
+                web::get().to(routes::recording::get_recording),
+            )
+            .route(
+                "/api/recordings/{id}",
+                web::delete().to(routes::recording::delete_recording),
+            )
+            // ── Playback System ──
+            .route(
+                "/api/recordings/{id}/play",
+                web::post().to(routes::recording::start_playback),
+            )
+            .route(
+                "/api/recordings/{id}/playback/status",
+                web::get().to(routes::recording::get_playback_status),
+            )
+            .route(
+                "/api/recordings/{id}/playback/stop",
+                web::post().to(routes::recording::stop_playback),
+            )
+            .route(
+                "/api/recordings/{id}/playback/pause",
+                web::post().to(routes::recording::pause_playback),
+            )
+            .route(
+                "/api/recordings/{id}/playback/resume",
+                web::post().to(routes::recording::resume_playback),
+            )
+            // ── Shell Command Execution ──
+            .route(
+                "/api/devices/{udid}/shell",
+                web::post().to(routes::control::execute_shell),
+            )
+            // ── Batch Report Export ──
+            .route(
+                "/api/batch/reports",
+                web::get().to(routes::batch_report::list_batch_reports),
+            )
+            .route(
+                "/api/batch/reports/{id}",
+                web::get().to(routes::batch_report::get_batch_report),
+            )
+            .route(
+                "/api/batch/reports/{id}",
+                web::delete().to(routes::batch_report::delete_batch_report),
             )
             // ── Files management ──
             .route("/files", web::get().to(routes::control::files))

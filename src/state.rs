@@ -2,6 +2,7 @@ use crate::config::AppConfig;
 use crate::db::Database;
 use crate::pool::connection_pool::ConnectionPool;
 use crate::pool::screenshot_cache::ScreenshotCache;
+use crate::services::recording_service::RecordingService;
 use dashmap::DashMap;
 use moka::future::Cache;
 use serde_json::Value;
@@ -30,6 +31,7 @@ pub struct AppState {
     pub tera: tera::Tera,
     pub heartbeat_sessions: Arc<DashMap<String, HeartbeatSession>>,
     pub host_ip: String,
+    pub recording_service: RecordingService,
 }
 
 impl AppState {
@@ -40,6 +42,7 @@ impl AppState {
         tera: tera::Tera,
         host_ip: String,
     ) -> Self {
+        let recording_service = RecordingService::new(db.get_pool());
         Self {
             db,
             config,
@@ -52,6 +55,7 @@ impl AppState {
             tera,
             heartbeat_sessions: Arc::new(DashMap::new()),
             host_ip,
+            recording_service,
         }
     }
 }

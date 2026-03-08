@@ -1,5 +1,6 @@
 use crate::device::adb::Adb;
 use crate::device::atx_client::AtxClient;
+use crate::models::recording::{ActionType, RecordActionRequest};
 use crate::services::device_service::DeviceService;
 use crate::state::AppState;
 use actix_multipart::Multipart;
@@ -680,10 +681,10 @@ pub async fn batch_screenshot(
         "partial"
     };
 
-    let http_status = if failure_count == 0 {
+    // Return 200 OK even for complete failures - these are device-side issues, not server errors
+    // Client should check the "status" field for actual result
+    let http_status = if failure_count == 0 || success_count == 0 {
         actix_web::http::StatusCode::OK
-    } else if success_count == 0 {
-        actix_web::http::StatusCode::INTERNAL_SERVER_ERROR
     } else {
         actix_web::http::StatusCode::MULTI_STATUS
     };
@@ -694,6 +695,404 @@ pub async fn batch_screenshot(
         "success": success_count,
         "failed": failure_count,
         "results": response_results
+    }))
+}
+
+// ═══════════════ BATCH CONTROL OPERATIONS ═══════════════
+
+#[derive(Deserialize)]
+pub struct BatchTapRequest {
+    udids: Vec<String>,
+    x: i32,
+    y: i32,
+}
+
+#[derive(Deserialize)]
+pub struct BatchSwipeRequest {
+    udids: Vec<String>,
+    x: i32,
+    y: i32,
+    x2: i32,
+    y2: i32,
+    #[serde(default = "default_swipe_duration")]
+    duration: i32,
+}
+
+fn default_swipe_duration() -> i32 { 200 }
+
+#[derive(Deserialize)]
+pub struct BatchInputRequest {
+    udids: Vec<String>,
+    text: String,
+    #[serde(default)]
+    clear: bool,
+}
+
+/// POST /api/batch/tap - Execute tap on multiple devices in parallel
+pub async fn batch_tap(
+    state: web::Data<AppState>,
+    body: web::Json<BatchTapRequest>,
+) -> HttpResponse {
+    let udids = &body.udids;
+
+    if udids.is_empty() {
+        return HttpResponse::BadRequest().json(json!({
+            "status": "error",
+            "error": "ERR_NO_DEVICES_SELECTED",
+            "message": "At least one device must be selected"
+        }));
+    }
+
+    // Batch size limit (per NFR requirements)
+    const MAX_BATCH_SIZE: usize = 20;
+    if udids.len() > MAX_BATCH_SIZE {
+        return HttpResponse::BadRequest().json(json!({
+            "status": "error",
+            "error": "ERR_BATCH_TOO_LARGE",
+            "message": format!("Too many devices. Maximum is {}", MAX_BATCH_SIZE)
+        }));
+    }
+
+    let x = body.x;
+    let y = body.y;
+
+    // Execute taps concurrently
+    let mut tasks = Vec::new();
+    for udid in udids.clone() {
+        let state_clone = state.clone();
+        let task = async move {
+            let udid = udid.clone();
+            match get_device_client(&state_clone, &udid).await {
+                Ok((device, client)) => {
+                    // Mock device
+                    if device.get("is_mock").and_then(|v| v.as_bool()).unwrap_or(false) {
+                        return (udid, Ok(()));
+                    }
+
+                    let serial = device.get("serial").and_then(|v| v.as_str()).unwrap_or("").to_string();
+
+                    // Try ATX first
+                    match client.click(x, y).await {
+                        Ok(_) => (udid, Ok(())),
+                        Err(e) => {
+                            tracing::warn!("[BATCH_TAP] ATX failed {}: {}, trying ADB fallback", udid, e);
+                            if !serial.is_empty() {
+                                match Adb::input_tap(&serial, x, y).await {
+                                    Ok(_) => (udid, Ok(())),
+                                    Err(e2) => (udid, Err(("ERR_TAP_FAILED", e2))),
+                                }
+                            } else {
+                                (udid, Err(("ERR_TAP_FAILED", e)))
+                            }
+                        }
+                    }
+                }
+                Err(resp) => {
+                    // Extract error from HttpResponse
+                    let error_code = if resp.status() == actix_web::http::StatusCode::NOT_FOUND {
+                        "ERR_DEVICE_NOT_FOUND"
+                    } else if resp.status() == actix_web::http::StatusCode::SERVICE_UNAVAILABLE {
+                        "ERR_DEVICE_DISCONNECTED"
+                    } else {
+                        "ERR_DEVICE_ERROR"
+                    };
+                    (udid, Err((error_code, format!("Device error: {}", resp.status()))))
+                }
+            }
+        };
+        tasks.push(task);
+    }
+
+    let results = futures::future::join_all(tasks).await;
+
+    // Collect results
+    let mut batch_results = Vec::new();
+    let mut successful = 0;
+    let mut failed = 0;
+
+    for (udid, result) in results {
+        match result {
+            Ok(_) => {
+                batch_results.push(json!({"udid": udid, "status": "success"}));
+                successful += 1;
+            }
+            Err((code, msg)) => {
+                batch_results.push(json!({
+                    "udid": udid,
+                    "status": "error",
+                    "error": code,
+                    "message": msg
+                }));
+                failed += 1;
+            }
+        }
+    }
+
+    let overall_status = if failed == 0 { "success" } else if successful == 0 { "failed" } else { "partial" };
+    // Return 200 OK even for complete failures - these are device-side issues, not server errors
+    // Client should check the "status" field for actual result
+    let http_status = if failed == 0 || successful == 0 {
+        actix_web::http::StatusCode::OK
+    } else {
+        actix_web::http::StatusCode::MULTI_STATUS
+    };
+
+    HttpResponse::build(http_status).json(json!({
+        "status": overall_status,
+        "total": udids.len(),
+        "successful": successful,
+        "failed": failed,
+        "results": batch_results
+    }))
+}
+
+/// POST /api/batch/swipe - Execute swipe on multiple devices in parallel
+pub async fn batch_swipe(
+    state: web::Data<AppState>,
+    body: web::Json<BatchSwipeRequest>,
+) -> HttpResponse {
+    let udids = &body.udids;
+
+    if udids.is_empty() {
+        return HttpResponse::BadRequest().json(json!({
+            "status": "error",
+            "error": "ERR_NO_DEVICES_SELECTED",
+            "message": "At least one device must be selected"
+        }));
+    }
+
+    const MAX_BATCH_SIZE: usize = 20;
+    if udids.len() > MAX_BATCH_SIZE {
+        return HttpResponse::BadRequest().json(json!({
+            "status": "error",
+            "error": "ERR_BATCH_TOO_LARGE",
+            "message": format!("Too many devices. Maximum is {}", MAX_BATCH_SIZE)
+        }));
+    }
+
+    let x = body.x;
+    let y = body.y;
+    let x2 = body.x2;
+    let y2 = body.y2;
+    let duration_ms = body.duration.max(50).min(2000);
+    let duration = duration_ms as f64 / 1000.0;
+
+    let mut tasks = Vec::new();
+    for udid in udids.clone() {
+        let state_clone = state.clone();
+        let task = async move {
+            let udid = udid.clone();
+            match get_device_client(&state_clone, &udid).await {
+                Ok((device, client)) => {
+                    if device.get("is_mock").and_then(|v| v.as_bool()).unwrap_or(false) {
+                        return (udid, Ok(()));
+                    }
+
+                    let serial = device.get("serial").and_then(|v| v.as_str()).unwrap_or("").to_string();
+
+                    match client.swipe(x, y, x2, y2, duration.max(0.05).min(2.0)).await {
+                        Ok(_) => (udid, Ok(())),
+                        Err(e) => {
+                            tracing::warn!("[BATCH_SWIPE] ATX failed {}: {}, trying ADB fallback", udid, e);
+                            if !serial.is_empty() {
+                                match Adb::input_swipe(&serial, x, y, x2, y2, duration_ms).await {
+                                    Ok(_) => (udid, Ok(())),
+                                    Err(e2) => (udid, Err(("ERR_SWIPE_FAILED", e2))),
+                                }
+                            } else {
+                                (udid, Err(("ERR_SWIPE_FAILED", e)))
+                            }
+                        }
+                    }
+                }
+                Err(resp) => {
+                    // Extract error from HttpResponse - distinguish between not found and disconnected
+                    let error_code = if resp.status() == actix_web::http::StatusCode::NOT_FOUND {
+                        "ERR_DEVICE_NOT_FOUND"
+                    } else if resp.status() == actix_web::http::StatusCode::SERVICE_UNAVAILABLE {
+                        "ERR_DEVICE_DISCONNECTED"
+                    } else {
+                        "ERR_DEVICE_ERROR"
+                    };
+                    (udid, Err((error_code, format!("Device error: {}", resp.status()))))
+                }
+            }
+        };
+        tasks.push(task);
+    }
+
+    let results = futures::future::join_all(tasks).await;
+
+    let mut batch_results = Vec::new();
+    let mut successful = 0;
+    let mut failed = 0;
+
+    for (udid, result) in results {
+        match result {
+            Ok(_) => {
+                batch_results.push(json!({"udid": udid, "status": "success"}));
+                successful += 1;
+            }
+            Err((code, msg)) => {
+                batch_results.push(json!({
+                    "udid": udid,
+                    "status": "error",
+                    "error": code,
+                    "message": msg
+                }));
+                failed += 1;
+            }
+        }
+    }
+
+    let overall_status = if failed == 0 { "success" } else if successful == 0 { "failed" } else { "partial" };
+    // Return 200 OK even for complete failures - these are device-side issues, not server errors
+    // Client should check the "status" field for actual result
+    let http_status = if failed == 0 || successful == 0 {
+        actix_web::http::StatusCode::OK
+    } else {
+        actix_web::http::StatusCode::MULTI_STATUS
+    };
+
+    HttpResponse::build(http_status).json(json!({
+        "status": overall_status,
+        "total": udids.len(),
+        "successful": successful,
+        "failed": failed,
+        "results": batch_results
+    }))
+}
+
+/// POST /api/batch/input - Execute text input on multiple devices in parallel
+pub async fn batch_input(
+    state: web::Data<AppState>,
+    body: web::Json<BatchInputRequest>,
+) -> HttpResponse {
+    let udids = &body.udids;
+
+    if udids.is_empty() {
+        return HttpResponse::BadRequest().json(json!({
+            "status": "error",
+            "error": "ERR_NO_DEVICES_SELECTED",
+            "message": "At least one device must be selected"
+        }));
+    }
+
+    if body.text.is_empty() {
+        return HttpResponse::BadRequest().json(json!({
+            "status": "error",
+            "error": "ERR_INVALID_REQUEST",
+            "message": "Text cannot be empty"
+        }));
+    }
+
+    const MAX_BATCH_SIZE: usize = 20;
+    if udids.len() > MAX_BATCH_SIZE {
+        return HttpResponse::BadRequest().json(json!({
+            "status": "error",
+            "error": "ERR_BATCH_TOO_LARGE",
+            "message": format!("Too many devices. Maximum is {}", MAX_BATCH_SIZE)
+        }));
+    }
+
+    let text = body.text.clone();
+    let clear = body.clear;
+
+    let mut tasks = Vec::new();
+    for udid in udids.clone() {
+        let state_clone = state.clone();
+        let text_clone = text.clone();
+        let task = async move {
+            let udid = udid.clone();
+            match get_device_client(&state_clone, &udid).await {
+                Ok((device, client)) => {
+                    if device.get("is_mock").and_then(|v| v.as_bool()).unwrap_or(false) {
+                        return (udid, Ok(()));
+                    }
+
+                    let serial = device.get("serial").and_then(|v| v.as_str()).unwrap_or("").to_string();
+
+                    // Clear field first if requested (best-effort, log failures)
+                    if clear {
+                        if let Err(e) = client.shell_cmd("input keyevent --longpress 29").await {
+                            tracing::debug!("[BATCH_INPUT] Clear select-all failed for {}: {}", udid, e);
+                        }
+                        if let Err(e) = client.shell_cmd("input keyevent 67").await {
+                            tracing::debug!("[BATCH_INPUT] Clear backspace failed for {}: {}", udid, e);
+                        }
+                        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+                    }
+
+                    match client.input_text(&text_clone).await {
+                        Ok(_) => (udid, Ok(())),
+                        Err(e) => {
+                            tracing::warn!("[BATCH_INPUT] ATX failed {}: {}, trying ADB fallback", udid, e);
+                            if !serial.is_empty() {
+                                match Adb::input_text(&serial, &text_clone).await {
+                                    Ok(_) => (udid, Ok(())),
+                                    Err(e2) => (udid, Err(("ERR_INPUT_FAILED", e2))),
+                                }
+                            } else {
+                                (udid, Err(("ERR_INPUT_FAILED", e)))
+                            }
+                        }
+                    }
+                }
+                Err(resp) => {
+                    // Extract error from HttpResponse - distinguish between not found and disconnected
+                    let error_code = if resp.status() == actix_web::http::StatusCode::NOT_FOUND {
+                        "ERR_DEVICE_NOT_FOUND"
+                    } else if resp.status() == actix_web::http::StatusCode::SERVICE_UNAVAILABLE {
+                        "ERR_DEVICE_DISCONNECTED"
+                    } else {
+                        "ERR_DEVICE_ERROR"
+                    };
+                    (udid, Err((error_code, format!("Device error: {}", resp.status()))))
+                }
+            }
+        };
+        tasks.push(task);
+    }
+
+    let results = futures::future::join_all(tasks).await;
+
+    let mut batch_results = Vec::new();
+    let mut successful = 0;
+    let mut failed = 0;
+
+    for (udid, result) in results {
+        match result {
+            Ok(_) => {
+                batch_results.push(json!({"udid": udid, "status": "success"}));
+                successful += 1;
+            }
+            Err((code, msg)) => {
+                batch_results.push(json!({
+                    "udid": udid,
+                    "status": "error",
+                    "error": code,
+                    "message": msg
+                }));
+                failed += 1;
+            }
+        }
+    }
+
+    let overall_status = if failed == 0 { "success" } else if successful == 0 { "failed" } else { "partial" };
+    // Return 200 OK even for complete failures - these are device-side issues, not server errors
+    // Client should check the "status" field for actual result
+    let http_status = if failed == 0 || successful == 0 {
+        actix_web::http::StatusCode::OK
+    } else {
+        actix_web::http::StatusCode::MULTI_STATUS
+    };
+
+    HttpResponse::build(http_status).json(json!({
+        "status": overall_status,
+        "total": udids.len(),
+        "successful": successful,
+        "failed": failed,
+        "results": batch_results
     }))
 }
 
@@ -838,6 +1237,28 @@ pub async fn inspector_touch(
         return HttpResponse::Ok().json(json!({"status": "ok"}));
     }
 
+    // Check if recording is active and not paused for this device
+    if state.recording_service.should_capture(&udid).await {
+        let action_type = if action == "swipe" {
+            ActionType::Swipe
+        } else {
+            ActionType::Tap
+        };
+        let request = RecordActionRequest {
+            action_type,
+            x: Some(x),
+            y: Some(y),
+            x2: if action == "swipe" { Some(x2) } else { None },
+            y2: if action == "swipe" { Some(y2) } else { None },
+            duration_ms: if action == "swipe" { Some(duration_ms) } else { None },
+            text: None,
+            key_code: None,
+        };
+        if let Err(e) = state.recording_service.record_action(&udid, request).await {
+            tracing::warn!("[RECORDING] Failed to record action for {}: {}", udid, e);
+        }
+    }
+
     // Fire-and-forget
     let action = action.to_string();
     let duration = duration_ms as f64 / 1000.0;
@@ -905,6 +1326,23 @@ pub async fn inspector_input(
 
     if device.get("is_mock").and_then(|v| v.as_bool()).unwrap_or(false) {
         return HttpResponse::Ok().json(json!({"status": "ok"}));
+    }
+
+    // Check if recording is active and not paused for this device
+    if state.recording_service.should_capture(&udid).await {
+        let request = RecordActionRequest {
+            action_type: ActionType::Input,
+            x: None,
+            y: None,
+            x2: None,
+            y2: None,
+            duration_ms: None,
+            text: Some(text.clone()),
+            key_code: None,
+        };
+        if let Err(e) = state.recording_service.record_action(&udid, request).await {
+            tracing::warn!("[RECORDING] Failed to record input action for {}: {}", udid, e);
+        }
     }
 
     let serial = device.get("serial").and_then(|v| v.as_str()).unwrap_or("").to_string();
@@ -1024,6 +1462,42 @@ pub async fn inspector_keyevent(
         return HttpResponse::Ok().json(json!({"status": "ok"}));
     }
 
+    // Check if recording is active and not paused for this device
+    if state.recording_service.should_capture(&udid).await {
+        // Map key name to Android keycode for recording
+        let key_code: i32 = match android_key.as_str() {
+            "home" => 3,
+            "back" => 4,
+            "menu" => 82,
+            "power" => 26,
+            "wakeup" => 224,
+            "volume_up" => 24,
+            "volume_down" => 25,
+            "enter" => 66,
+            "tab" => 61,
+            "del" => 67,
+            "forward_del" => 112,
+            "dpad_up" => 19,
+            "dpad_down" => 20,
+            "dpad_left" => 21,
+            "dpad_right" => 22,
+            _ => 0,
+        };
+        let request = RecordActionRequest {
+            action_type: ActionType::KeyEvent,
+            x: None,
+            y: None,
+            x2: None,
+            y2: None,
+            duration_ms: None,
+            text: None,
+            key_code: Some(key_code),
+        };
+        if let Err(e) = state.recording_service.record_action(&udid, request).await {
+            tracing::warn!("[RECORDING] Failed to record keyevent action for {}: {}", udid, e);
+        }
+    }
+
     let serial = device.get("serial").and_then(|v| v.as_str()).unwrap_or("").to_string();
     tokio::spawn(async move {
         if let Err(e) = client.press_key(&android_key).await {
@@ -1048,22 +1522,52 @@ pub async fn inspector_hierarchy(
 ) -> HttpResponse {
     let udid = path.into_inner();
     if udid.is_empty() {
-        return HttpResponse::BadRequest().finish();
+        return HttpResponse::BadRequest().json(json!({
+            "status": "error",
+            "error": "ERR_INVALID_REQUEST",
+            "message": "UDID cannot be empty"
+        }));
     }
 
-    let phone_service = crate::services::phone_service::PhoneService::new(state.db.clone());
-    let device = match phone_service.query_info_by_udid(&udid).await {
-        Ok(Some(d)) => d,
-        _ => return HttpResponse::NotFound().body("Device not found"),
+    let (device, client) = match get_device_client(&state, &udid).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
     };
 
-    let ip = device.get("ip").and_then(|v| v.as_str()).unwrap_or("");
-    let port = device.get("port").and_then(|v| v.as_i64()).unwrap_or(9008);
-    let client = AtxClient::new(ip, port, &udid);
+    // Mock device handling
+    if device.get("is_mock").and_then(|v| v.as_bool()).unwrap_or(false) {
+        return HttpResponse::Ok().json(json!({
+            "id": "mock-root",
+            "className": "android.widget.FrameLayout",
+            "text": "",
+            "resourceId": "",
+            "description": "",
+            "rect": {"x": 0, "y": 0, "width": 1080, "height": 2400},
+            "clickable": false,
+            "enabled": true,
+            "children": [
+                {
+                    "id": "mock-button",
+                    "className": "android.widget.Button",
+                    "text": "Mock Button",
+                    "resourceId": "com.app:id/button",
+                    "description": "",
+                    "rect": {"x": 100, "y": 200, "width": 200, "height": 50},
+                    "clickable": true,
+                    "enabled": true,
+                    "children": []
+                }
+            ]
+        }));
+    }
 
     match DeviceService::dump_hierarchy(&client).await {
         Ok(hierarchy) => HttpResponse::Ok().json(hierarchy),
-        Err(e) => HttpResponse::InternalServerError().json(json!({"error": e})),
+        Err(e) => HttpResponse::InternalServerError().json(json!({
+            "status": "error",
+            "error": "ERR_HIERARCHY_FAILED",
+            "message": e
+        })),
     }
 }
 
@@ -1423,6 +1927,180 @@ pub async fn shell(
     let _ = client.shell_cmd(&command).await;
 
     HttpResponse::Ok().body(format!("{} sized of 0 successfully stored", udid))
+}
+
+// ═══════════════ EXECUTE SHELL (NEW API) ═══════════════
+
+/// Blocked command patterns for safety
+const BLOCKED_COMMAND_PATTERNS: &[&str] = &[
+    // Device disruption
+    "reboot", "shutdown", "restart", "init 6", "init 0",
+    "svc power reboot", "svc power shutdown",
+    // Data destruction
+    "rm -rf", "rm -r -f", "rm -fr",
+    "factory-reset", "recovery",
+    "format data", "format cache",
+    // System modification
+    "dd if=", "dd of=",
+    "mount ", "umount ",
+    "chmod -r 777", "chmod 777 /",
+    // Process control
+    "killall", "kill -9",
+    "stop adbd", "stop zygote",
+    // Package management (could break device)
+    "pm uninstall", "pm clear",
+];
+
+/// Check if a command is dangerous/blocked
+fn is_dangerous_command(cmd: &str) -> bool {
+    let cmd_lower = cmd.to_lowercase();
+    BLOCKED_COMMAND_PATTERNS.iter().any(|p| cmd_lower.contains(p))
+}
+
+/// Check for shell metacharacters that could enable command injection
+fn has_dangerous_metacharacters(cmd: &str) -> bool {
+    // Check for command chaining/injection patterns
+    let dangerous_patterns = ["; ", " && ", " || ", "| ", "$((", "`", "$(", "> /", ">> /"];
+    dangerous_patterns.iter().any(|p| cmd.contains(p))
+}
+
+/// POST /api/devices/{udid}/shell → execute shell command with safety checks
+pub async fn execute_shell(
+    state: web::Data<AppState>,
+    path: web::Path<String>,
+    body: web::Json<Value>,
+) -> HttpResponse {
+    let udid = path.into_inner();
+    if udid.is_empty() {
+        return HttpResponse::BadRequest().json(json!({
+            "status": "error",
+            "error": "ERR_INVALID_REQUEST",
+            "message": "UDID cannot be empty"
+        }));
+    }
+
+    let command = body
+        .get("command")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+
+    if command.is_empty() {
+        return HttpResponse::BadRequest().json(json!({
+            "status": "error",
+            "error": "ERR_INVALID_REQUEST",
+            "message": "Command cannot be empty"
+        }));
+    }
+
+    // Check for dangerous commands
+    if is_dangerous_command(command) {
+        tracing::warn!("[SHELL] Blocked dangerous command attempted: {}", command);
+        return HttpResponse::Forbidden().json(json!({
+            "status": "error",
+            "error": "ERR_DANGEROUS_COMMAND",
+            "message": format!(
+                "Command is blocked for safety. Blocked patterns include: reboot, rm -rf, factory-reset, dd, mount"
+            )
+        }));
+    }
+
+    // Warn about metacharacters but allow (log for audit)
+    if has_dangerous_metacharacters(command) {
+        tracing::warn!("[SHELL] Command contains shell metacharacters (allowed but logged): {}", command);
+    }
+
+    // Parse timeout (default 30s, max 60s, min 1s)
+    let timeout_ms = body
+        .get("timeout")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(30000)
+        .max(1000)
+        .min(60000);
+
+    let (device, client) = match get_device_client(&state, &udid).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+
+    // Mock device handling
+    if device.get("is_mock").and_then(|v| v.as_bool()).unwrap_or(false) {
+        return HttpResponse::Ok().json(json!({
+            "status": "success",
+            "stdout": "mock output",
+            "stderr": "",
+            "exit_code": 0,
+            "duration_ms": 10
+        }));
+    }
+
+    let start = std::time::Instant::now();
+
+    // Execute with timeout
+    let timeout_duration = std::time::Duration::from_millis(timeout_ms);
+    let command_owned = command.to_string();
+
+    let result = tokio::time::timeout(
+        timeout_duration,
+        async {
+            client.shell_cmd(&command_owned).await
+        }
+    ).await;
+
+    let duration_ms = start.elapsed().as_millis() as u64;
+
+    match result {
+        Ok(Ok(output)) => {
+            HttpResponse::Ok().json(json!({
+                "status": "success",
+                "stdout": output,
+                "stderr": "",
+                "exit_code": 0,
+                "duration_ms": duration_ms
+            }))
+        }
+        Ok(Err(e)) => {
+            // Try ADB fallback for USB devices
+            let serial = device.get("serial").and_then(|v| v.as_str()).unwrap_or("");
+            if !serial.is_empty() && crate::device::adb::Adb::is_usb_serial(serial) {
+                match crate::device::adb::Adb::shell(serial, &command).await {
+                    Ok(output) => {
+                        HttpResponse::Ok().json(json!({
+                            "status": "success",
+                            "stdout": output,
+                            "stderr": "",
+                            "exit_code": 0,
+                            "duration_ms": duration_ms
+                        }))
+                    }
+                    Err(adb_err) => {
+                        HttpResponse::InternalServerError().json(json!({
+                            "status": "error",
+                            "error": "ERR_COMMAND_FAILED",
+                            "message": format!("Command failed (ATX: {}, ADB: {})", e, adb_err)
+                        }))
+                    }
+                }
+            } else {
+                HttpResponse::InternalServerError().json(json!({
+                    "status": "error",
+                    "error": "ERR_COMMAND_FAILED",
+                    "message": e
+                }))
+            }
+        }
+        Err(_) => {
+            // Timeout occurred
+            tracing::warn!("[SHELL] Command timed out after {}ms: {}", timeout_ms, command);
+            HttpResponse::RequestTimeout().json(json!({
+                "status": "error",
+                "error": "ERR_COMMAND_TIMEOUT",
+                "message": format!("Command exceeded {}ms timeout", timeout_ms),
+                "partial_stdout": "",
+                "partial_stderr": "",
+                "duration_ms": duration_ms
+            }))
+        }
+    }
 }
 
 // ═══════════════ WIFI CONNECT ═══════════════
