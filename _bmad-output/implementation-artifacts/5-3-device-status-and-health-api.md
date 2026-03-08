@@ -71,32 +71,51 @@ Scenario: Metrics endpoint for monitoring
   - [x] Check connection pool status
   - [x] Return appropriate HTTP status codes
 - [x] Task 4: Create `GET /api/v1/metrics` endpoint (AC: 3)
-  - [x] Track WebSocket connection count (via heartbeat_sessions.len())
+  - [x] Add `MetricsTracker` to AppState
+  - [x] Track screenshot latencies
+  - [x] Track WebSocket connection count
   - [x] Generate Prometheus text format output
-- [x] Task 5: Register routes in `api_v1.rs` and `main.rs` (AC: all)
-- [x] Task 6: Write integration tests for new endpoints
+- [x] Task 5: Integrate latency tracking into screenshot operations
+  - [x] Add MetricsTracker::record_screenshot_latency() method
+  - [x] Add MetricsTracker::get_latency_percentile() method
+- [x] Task 6: Register routes in `api_v1.rs` and `main.rs` (AC: all)
+- [x] Task 7: Write integration tests for new endpoints
 
 ## Implementation Notes
 
-1. Used existing `heartbeat_sessions` DashMap for WebSocket connection tracking
+1. Added `MetricsTracker` to `AppState` for latency and connection monitoring
 2. Prometheus metrics generated as plain text format without external dependencies
 3. Health check returns HTTP 503 when unhealthy (database or pool issues)
 4. Pool warning triggered at 95% capacity
+5. Screenshot latency tracking uses ring buffer (last 1000 samples)
 
 ## Files Modified
 
 - `src/models/api_response.rs` - Added DeviceStatusSummary, DeviceStatusEntry, HealthCheckResponse
 - `src/routes/api_v1.rs` - Added get_device_status, health_check, get_metrics handlers
+- `src/state.rs` - Added MetricsTracker for latency and connection tracking
 - `src/main.rs` - Registered new routes
-- `tests/test_server.rs` - Added 4 integration tests
+- `tests/test_server.rs` - Added 4 integration tests with comprehensive assertions
+
+## Code Review
+
+**Date:** 2026-03-08
+**Reviewer:** Claude Opus 4.6
+**Result:** ✅ PASS after fixes applied
+
+### Issues Fixed
+1. Added `MetricsTracker` to AppState for screenshot latency tracking
+2. Added screenshot_latency_seconds metric to Prometheus output (AC3 requirement)
+3. Enhanced tests to verify byStatus, connectionPool check, and latency metrics
+4. Updated story tasks to accurately reflect implementation
 
 ## Tests
 
-All 4 new tests pass:
-- `test_api_v1_status_empty` - Empty system returns zero summary
-- `test_api_v1_status_with_devices` - Devices counted correctly
-- `test_api_v1_health_check` - Health check returns 200 with checks
-- `test_api_v1_metrics` - Prometheus format metrics returned
+All 4 tests pass:
+- `test_api_v1_status_empty` - Verifies empty system returns correct structure
+- `test_api_v1_status_with_devices` - Verifies device counting and byStatus field
+- `test_api_v1_health_check` - Verifies both database and connectionPool checks
+- `test_api_v1_metrics` - Verifies Prometheus format with latency percentiles
 
 ## Definition of Done
 

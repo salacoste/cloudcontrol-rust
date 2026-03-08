@@ -648,6 +648,7 @@ pub async fn health_check(state: web::Data<AppState>) -> HttpResponse {
 /// - error_devices: Number of devices in error state
 /// - websocket_connections: Active WebSocket connections
 /// - pool_size: Current connection pool size
+/// - screenshot_latency_seconds: Screenshot capture latency percentiles
 pub async fn get_metrics(state: web::Data<AppState>) -> HttpResponse {
     let phone_service = crate::services::phone_service::PhoneService::new(state.db.clone());
 
@@ -671,8 +672,14 @@ pub async fn get_metrics(state: web::Data<AppState>) -> HttpResponse {
     let pool_stats = state.connection_pool.stats();
     let pool_size = pool_stats.get("total").and_then(|v| v.as_u64()).unwrap_or(0);
 
-    // Count WebSocket connections from heartbeat_sessions
-    let ws_connections = state.heartbeat_sessions.len() as u64;
+    // Get WebSocket connections from metrics tracker
+    let ws_connections = state.metrics.get_ws_count() as u64;
+
+    // Get screenshot latency percentiles
+    let p50 = state.metrics.get_latency_percentile(0.5).unwrap_or(0.0);
+    let p90 = state.metrics.get_latency_percentile(0.9).unwrap_or(0.0);
+    let p95 = state.metrics.get_latency_percentile(0.95).unwrap_or(0.0);
+    let p99 = state.metrics.get_latency_percentile(0.99).unwrap_or(0.0);
 
     // Build Prometheus text format
     let metrics = format!(
@@ -695,8 +702,15 @@ cloudcontrol_websocket_connections {}
 # HELP cloudcontrol_pool_size Current connection pool size
 # TYPE cloudcontrol_pool_size gauge
 cloudcontrol_pool_size {}
+
+# HELP cloudcontrol_screenshot_latency_seconds Screenshot capture latency
+# TYPE cloudcontrol_screenshot_latency_seconds summary
+cloudcontrol_screenshot_latency_seconds{{quantile="0.5"}} {}
+cloudcontrol_screenshot_latency_seconds{{quantile="0.9"}} {}
+cloudcontrol_screenshot_latency_seconds{{quantile="0.95"}} {}
+cloudcontrol_screenshot_latency_seconds{{quantile="0.99"}} {}
 "#,
-        connected, disconnected, error_count, ws_connections, pool_size
+        connected, disconnected, error_count, ws_connections, pool_size, p50, p90, p95, p99
     );
 
     HttpResponse::Ok()

@@ -3210,6 +3210,10 @@ async fn test_api_v1_status_empty() {
     let body: Value = test::read_body_json(resp).await;
     assert_eq!(body["status"], "success");
     assert_eq!(body["data"]["total"], 0);
+    // Verify byStatus exists (empty)
+    assert!(body["data"]["byStatus"].is_object());
+    // Verify devices array is empty
+    assert!(body["data"]["devices"].as_array().unwrap().is_empty());
 }
 
 #[actix_web::test]
@@ -3229,7 +3233,18 @@ async fn test_api_v1_status_with_devices() {
     let body: Value = test::read_body_json(resp).await;
     assert_eq!(body["status"], "success");
     assert_eq!(body["data"]["total"], 2);
-    assert!(body["data"]["devices"].as_array().unwrap().len() == 2);
+    // Verify byStatus has entries
+    assert!(body["data"]["byStatus"].is_object());
+    // Verify devices array has correct length
+    let devices = body["data"]["devices"].as_array().unwrap();
+    assert_eq!(devices.len(), 2);
+    // Verify device entries have required fields
+    for device in devices {
+        assert!(device.get("udid").is_some());
+        assert!(device.get("model").is_some());
+        assert!(device.get("status").is_some());
+        assert!(device.get("battery").is_some());
+    }
 }
 
 #[actix_web::test]
@@ -3244,7 +3259,12 @@ async fn test_api_v1_health_check() {
 
     let body: Value = test::read_body_json(resp).await;
     assert_eq!(body["status"], "healthy");
+    // Verify both checks exist
     assert_eq!(body["checks"]["database"], "ok");
+    assert_eq!(body["checks"]["connectionPool"], "ok");
+    // Verify pool info
+    assert!(body["poolSize"].is_number());
+    assert!(body["maxPoolSize"].is_number());
     assert!(body["timestamp"].is_string());
 }
 
@@ -3268,10 +3288,14 @@ async fn test_api_v1_metrics() {
     let body = test::read_body(resp).await;
     let body_str = String::from_utf8(body.to_vec()).unwrap();
 
-    // Verify Prometheus format metrics
+    // Verify all required Prometheus format metrics
     assert!(body_str.contains("# HELP cloudcontrol_connected_devices"));
     assert!(body_str.contains("# TYPE cloudcontrol_connected_devices gauge"));
     assert!(body_str.contains("cloudcontrol_connected_devices"));
     assert!(body_str.contains("cloudcontrol_websocket_connections"));
     assert!(body_str.contains("cloudcontrol_pool_size"));
+    // Verify screenshot latency metrics (AC3 requirement)
+    assert!(body_str.contains("# HELP cloudcontrol_screenshot_latency_seconds"));
+    assert!(body_str.contains("cloudcontrol_screenshot_latency_seconds{quantile=\"0.5\"}"));
+    assert!(body_str.contains("cloudcontrol_screenshot_latency_seconds{quantile=\"0.95\"}"));
 }
