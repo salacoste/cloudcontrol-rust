@@ -275,6 +275,49 @@ impl Database {
             .execute(&self.pool)
             .await?;
 
+        // Batch reports tables
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS batch_reports (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                operation_type TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                completed_at TEXT,
+                total_devices INTEGER NOT NULL,
+                successful INTEGER NOT NULL DEFAULT 0,
+                failed INTEGER NOT NULL DEFAULT 0
+            )
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS batch_report_results (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                batch_report_id INTEGER NOT NULL,
+                udid TEXT NOT NULL,
+                status TEXT NOT NULL,
+                error_code TEXT,
+                error_message TEXT,
+                duration_ms INTEGER,
+                screenshot TEXT,
+                sequence_order INTEGER NOT NULL,
+                FOREIGN KEY (batch_report_id) REFERENCES batch_reports(id) ON DELETE CASCADE
+            )
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_batch_reports_created ON batch_reports(created_at)")
+            .execute(&self.pool)
+            .await?;
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_batch_report_results_report ON batch_report_results(batch_report_id)")
+            .execute(&self.pool)
+            .await?;
+
         Ok(())
     }
 
@@ -1167,6 +1210,215 @@ impl Database {
         }
 
         Value::Object(obj)
+    }
+
+    // ─── Batch Report Operations ───
+
+    /// Create a new batch report.
+    pub async fn create_batch_report(
+        &self,
+        operation_type: &str,
+        total_devices: i32,
+    ) -> Result<i64, sqlx::Error> {
+        let now = chrono::Utc::now().to_rfc3339();
+        let result = sqlx::query(
+            "INSERT INTO batch_reports (operation_type, created_at, total_devices, successful, failed) VALUES (?1, ?2, ?3, 0, 0)"
+        )
+        .bind(operation_type)
+        .bind(&now)
+        .bind(total_devices)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(result.last_insert_rowid())
+    }
+
+    /// Complete a batch report by setting completed_at and final counts.
+    pub async fn complete_batch_report(
+        &self,
+        id: i64,
+        successful: i32,
+        failed: i32,
+    ) -> Result<(), sqlx::Error> {
+        let now = chrono::Utc::now().to_rfc3339();
+        sqlx::query(
+            "UPDATE batch_reports SET completed_at = ?1, successful = ?2, failed = ?3 WHERE id = ?4"
+        )
+        .bind(&now)
+        .bind(successful)
+        .bind(failed)
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
+    /// Add a device result to a batch report.
+    pub async fn add_batch_report_result(
+        &self,
+        batch_report_id: i64,
+        udid: &str,
+        status: &str,
+        error_code: Option<&str>,
+        error_message: Option<&str>,
+        duration_ms: Option<i32>,
+        screenshot: Option<&str>,
+        sequence_order: i32,
+    ) -> Result<i64, sqlx::Error> {
+        let result = sqlx::query(
+            "INSERT INTO batch_report_results (batch_report_id, udid, status, error_code, error_message, duration_ms, screenshot, sequence_order) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)"
+        )
+        .bind(batch_report_id)
+        .bind(udid)
+        .bind(status)
+        .bind(error_code)
+        .bind(error_message)
+        .bind(duration_ms)
+        .bind(screenshot)
+        .bind(sequence_order)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(result.last_insert_rowid())
+    }
+
+    /// Get a batch report by ID.
+    pub async fn get_batch_report(&self, id: i64) -> Result<Option<Value>, sqlx::Error> {
+        let row = sqlx::query(
+            "SELECT id, operation_type, created_at, completed_at, total_devices, successful, failed FROM batch_reports WHERE id = ?1"
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row.as_ref().map(|r| {
+            use sqlx::Row;
+            let id: i64 = r.get("id");
+            let operation_type: String = r.get("operation_type");
+            let created_at: String = r.get("created_at");
+            let completed_at: Option<String> = r.get("completed_at");
+            let total_devices: i32 = r.get("total_devices");
+            let successful: i32 = r.get("successful");
+            let failed: i32 = r.get("failed");
+
+            json!({
+                "id": id,
+                "operation_type": operation_type,
+                "createdAt": created_at,
+                "completedAt": completed_at,
+                "total_devices": total_devices,
+                "successful": successful,
+                "failed": failed
+            })
+        }))
+    }
+
+    /// Get all device results for a batch report.
+    pub async fn get_batch_report_results(&self, batch_report_id: i64) -> Result<Vec<Value>, sqlx::Error> {
+        let rows = sqlx::query(
+            "SELECT id, batch_report_id, udid, status, error_code, error_message, duration_ms, screenshot, sequence_order FROM batch_report_results WHERE batch_report_id = ?1 ORDER BY sequence_order ASC"
+        )
+        .bind(batch_report_id)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows.iter().map(|r| {
+            use sqlx::Row;
+            let id: i64 = r.get("id");
+            let udid: String = r.get("udid");
+            let status: String = r.get("status");
+            let error_code: Option<String> = r.get("error_code");
+            let error_message: Option<String> = r.get("error_message");
+            let duration_ms: Option<i32> = r.get("duration_ms");
+            let screenshot: Option<String> = r.get("screenshot");
+            let sequence_order: i32 = r.get("sequence_order");
+
+            json!({
+                "id": id,
+                "udid": udid,
+                "status": status,
+                "error_code": error_code,
+                "error_message": error_message,
+                "duration_ms": duration_ms,
+                "screenshot": screenshot,
+                "sequence_order": sequence_order
+            })
+        }).collect())
+    }
+
+    /// Get a batch report with all its device results.
+    pub async fn get_batch_report_with_results(&self, id: i64) -> Result<Option<Value>, sqlx::Error> {
+        let report = self.get_batch_report(id).await?;
+        if report.is_none() {
+            return Ok(None);
+        }
+
+        let results = self.get_batch_report_results(id).await?;
+
+        let mut report = report.unwrap();
+        if let Some(obj) = report.as_object_mut() {
+            obj.insert("results".to_string(), Value::Array(results));
+        }
+
+        Ok(Some(report))
+    }
+
+    /// List all batch reports, optionally filtered by operation type.
+    pub async fn list_batch_reports(&self, operation_type: Option<&str>) -> Result<Vec<Value>, sqlx::Error> {
+        let rows = if let Some(op_type) = operation_type {
+            sqlx::query(
+                "SELECT id, operation_type, created_at, completed_at, total_devices, successful, failed FROM batch_reports WHERE operation_type = ?1 ORDER BY created_at DESC"
+            )
+            .bind(op_type)
+            .fetch_all(&self.pool)
+            .await?
+        } else {
+            sqlx::query(
+                "SELECT id, operation_type, created_at, completed_at, total_devices, successful, failed FROM batch_reports ORDER BY created_at DESC"
+            )
+            .fetch_all(&self.pool)
+            .await?
+        };
+
+        Ok(rows.iter().map(|r| {
+            use sqlx::Row;
+            let id: i64 = r.get("id");
+            let operation_type: String = r.get("operation_type");
+            let created_at: String = r.get("created_at");
+            let completed_at: Option<String> = r.get("completed_at");
+            let total_devices: i32 = r.get("total_devices");
+            let successful: i32 = r.get("successful");
+            let failed: i32 = r.get("failed");
+
+            json!({
+                "id": id,
+                "operation_type": operation_type,
+                "createdAt": created_at,
+                "completedAt": completed_at,
+                "total_devices": total_devices,
+                "successful": successful,
+                "failed": failed
+            })
+        }).collect())
+    }
+
+    /// Delete a batch report and all its results.
+    pub async fn delete_batch_report(&self, id: i64) -> Result<bool, sqlx::Error> {
+        let result = sqlx::query("DELETE FROM batch_reports WHERE id = ?1")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+
+        Ok(result.rows_affected() > 0)
+    }
+
+    /// Delete all batch reports.
+    pub async fn delete_all_batch_reports(&self) -> Result<(), sqlx::Error> {
+        sqlx::query("DELETE FROM batch_reports")
+            .execute(&self.pool)
+            .await?;
+        Ok(())
     }
 }
 

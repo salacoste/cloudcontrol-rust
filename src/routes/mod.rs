@@ -1,4 +1,7 @@
+pub mod api_v1;
+pub mod batch_report;
 pub mod control;
 pub mod nio;
 pub mod recording;
+pub mod scrcpy;
 pub mod scrcpy_ws;

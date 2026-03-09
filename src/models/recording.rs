@@ -192,6 +192,38 @@ pub struct RecordingStatusResponse {
     pub action_count: i32,
 }
 
+/// Request to start playback
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StartPlaybackRequest {
+    /// Target device UDID for playback
+    pub target_device_udid: String,
+    /// Playback speed multiplier (1.0 = normal, 2.0 = double speed, 0.5 = half speed)
+    #[serde(default)]
+    pub speed: f32,
+}
+
+/// Response for starting playback
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StartPlaybackResponse {
+    pub status: String,
+    pub recording_id: i64,
+    pub target_device_udid: String,
+    pub total_actions: i32,
+    pub message: String,
+}
+
+/// Playback status response
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlaybackStatusResponse {
+    pub status: String,
+    pub recording_id: i64,
+    pub target_device_udid: String,
+    pub playback_status: String, // "playing", "paused", "stopped", "completed"
+    pub current_action_index: i32,
+    pub total_actions: i32,
+    pub progress_percent: f32,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

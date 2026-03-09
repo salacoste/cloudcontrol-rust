@@ -1,0 +1,126 @@
+# GitHub Actions workflow for cloudcontrol-rust device testing
+#
+# Prerequisites:
+#   - cloudcontrol-rust running and accessible from the runner
+#   - Android devices connected to the device farm
+#   - curl and jq available on the runner
+#
+# Configure CLOUDCONTROL_URL in repository settings or as a workflow input.
+
+name: Device Farm Test
+
+on:
+  workflow_dispatch:
+    inputs:
+      cloudcontrol_url:
+        description: "cloudcontrol-rust server URL"
+        default: "http://localhost:8000"
+        required: false
+      min_devices:
+        description: "Minimum devices required"
+        default: "1"
+        required: false
+  # Uncomment to run on push:
+  # push:
+  #   branches: [main]
+
+env:
+  CLOUDCONTROL_URL: ${{ github.event.inputs.cloudcontrol_url || 'http://localhost:8000' }}
+
+jobs:
+  device-test:
+    runs-on: self-hosted
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Wait for cloudcontrol-rust health
+        run: |
+          echo "Waiting for cloudcontrol-rust at ${CLOUDCONTROL_URL} ..."
+          for i in $(seq 1 60); do
+            status=$(curl -s -o /dev/null -w "%{http_code}" "${CLOUDCONTROL_URL}/api/v1/health" 2>/dev/null || true)
+            if [ "$status" = "200" ]; then
+              echo "Health check passed."
+              curl -s "${CLOUDCONTROL_URL}/api/v1/health" | jq .
+              break
+            fi
+            echo "  Attempt ${i}/60 — status: ${status:-timeout}"
+            sleep 2
+          done
+          if [ "$status" != "200" ]; then
+            echo "::error::Health check failed after 120s"
+            exit 1
+          fi
+
+      - name: Discover devices
+        id: devices
+        run: |
+          response=$(curl -sf "${CLOUDCONTROL_URL}/api/v1/devices")
+          api_status=$(echo "$response" | jq -r '.status')
+          if [ "$api_status" != "success" ]; then
+            echo "::error::Device list failed: $(echo "$response" | jq -r '.error // .message // "unknown"')"
+            exit 1
+          fi
+
+          count=$(echo "$response" | jq '.data | length')
+          min=${{ github.event.inputs.min_devices || '1' }}
+          echo "Found ${count} device(s) (minimum: ${min})"
+
+          if [ "$count" -lt "$min" ]; then
+            echo "::error::Not enough devices: ${count} < ${min}"
+            exit 1
+          fi
+
+          # Export device UDIDs for later steps
+          echo "$response" | jq -r '.data[].udid' > /tmp/device_udids.txt
+          echo "device_count=${count}" >> "$GITHUB_OUTPUT"
+          echo "Devices:"
+          cat /tmp/device_udids.txt
+
+      - name: Capture screenshots
+        run: |
+          mkdir -p screenshots
+          while read -r udid; do
+            echo "Capturing screenshot from ${udid} ..."
+            response=$(curl -sf "${CLOUDCONTROL_URL}/api/v1/devices/${udid}/screenshot?quality=80" || true)
+            shot_status=$(echo "$response" | jq -r '.status' 2>/dev/null || true)
+            if [ "$shot_status" = "success" ]; then
+              echo "$response" | jq -r '.data.data' | base64 -d > "screenshots/${udid}.jpg"
+              echo "  Saved screenshots/${udid}.jpg"
+            else
+              echo "::warning::Screenshot failed for ${udid}"
+            fi
+          done < /tmp/device_udids.txt
+
+      - name: Run tap test
+        run: |
+          # Tap center screen on first device as a smoke test
+          udid=$(head -1 /tmp/device_udids.txt)
+          echo "Sending tap (540, 960) to ${udid} ..."
+          response=$(curl -sf -X POST \
+            -H "Content-Type: application/json" \
+            -d '{"x": 540, "y": 960}' \
+            "${CLOUDCONTROL_URL}/api/v1/devices/${udid}/tap")
+
+          tap_status=$(echo "$response" | jq -r '.status')
+          if [ "$tap_status" = "success" ]; then
+            echo "Tap succeeded."
+          else
+            echo "::error::Tap failed: $(echo "$response" | jq -r '.error // "unknown"')"
+            exit 1
+          fi
+
+      - name: Check device status summary
+        run: |
+          curl -sf "${CLOUDCONTROL_URL}/api/v1/status" | jq .
+
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: device-screenshots
+          path: screenshots/
+          retention-days: 7
+          if-no-files-found: ignore

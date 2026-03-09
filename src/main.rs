@@ -278,20 +278,8 @@ async fn main() -> std::io::Result<()> {
                 web::get().to(routes::api_v1::ws_screenshot),
             )
             .route(
-                "/api/recordings/{id}/actions/{action_id}",
-                web::delete().to(routes::recording::delete_action),
-            )
-            .route(
-                "/api/recordings",
-                web::get().to(routes::recording::list_recordings),
-            )
-            .route(
-                "/api/recordings/{id}",
-                web::get().to(routes::recording::get_recording),
-            )
-            .route(
-                "/api/recordings/{id}",
-                web::delete().to(routes::recording::delete_recording),
+                "/api/v1/ws/nio",
+                web::get().to(routes::api_v1::ws_nio),
             )
             // ── Playback System ──
             .route(
@@ -368,6 +356,57 @@ async fn main() -> std::io::Result<()> {
             .route(
                 "/scrcpy/{udid}/status",
                 web::get().to(routes::scrcpy_ws::scrcpy_status),
+            )
+            // ── Scrcpy Session Management ──
+            .route(
+                "/scrcpy/{udid}/start",
+                web::post().to(routes::scrcpy::start_scrcpy_session),
+            )
+            .route(
+                "/scrcpy/{udid}/stop",
+                web::post().to(routes::scrcpy::stop_scrcpy_session),
+            )
+            .route(
+                "/scrcpy/sessions",
+                web::get().to(routes::scrcpy::list_scrcpy_sessions),
+            )
+            // ── Scrcpy Device Control ──
+            .route(
+                "/scrcpy/{udid}/tap",
+                web::post().to(routes::scrcpy::scrcpy_tap),
+            )
+            .route(
+                "/scrcpy/{udid}/key",
+                web::post().to(routes::scrcpy::scrcpy_key),
+            )
+            .route(
+                "/scrcpy/{udid}/swipe",
+                web::post().to(routes::scrcpy::scrcpy_swipe),
+            )
+            // ── Scrcpy Recording ──
+            .route(
+                "/scrcpy/{udid}/recording/start",
+                web::post().to(routes::scrcpy::start_scrcpy_recording),
+            )
+            .route(
+                "/scrcpy/{udid}/recording/stop",
+                web::post().to(routes::scrcpy::stop_scrcpy_recording),
+            )
+            .route(
+                "/scrcpy/recordings",
+                web::get().to(routes::scrcpy::list_scrcpy_recordings),
+            )
+            .route(
+                "/scrcpy/recordings/{id}",
+                web::get().to(routes::scrcpy::get_scrcpy_recording),
+            )
+            .route(
+                "/scrcpy/recordings/{id}/download",
+                web::get().to(routes::scrcpy::download_scrcpy_recording),
+            )
+            .route(
+                "/scrcpy/recordings/{id}",
+                web::delete().to(routes::scrcpy::delete_scrcpy_recording),
             )
             // ── Static files ──
             .service(fs::Files::new("/static", "resources/static").show_files_listing())

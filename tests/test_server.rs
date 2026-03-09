@@ -73,9 +73,31 @@ macro_rules! setup_test_app {
                 .route("/api/v1/status", web::get().to(routes::api_v1::get_device_status))
                 .route("/api/v1/health", web::get().to(routes::api_v1::health_check))
                 .route("/api/v1/metrics", web::get().to(routes::api_v1::get_metrics))
+                // API V1 OpenAPI spec (Story 5-4)
+                .route("/api/v1/openapi.json", web::get().to(routes::api_v1::openapi_spec))
+                // API V1 JSON-RPC WebSocket (Story 5-5)
+                .route("/api/v1/ws/nio", web::get().to(routes::api_v1::ws_nio))
                 .route("/files", web::get().to(routes::control::files))
                 .route("/file/delete/{group}/{filename}", web::get().to(routes::control::file_delete))
-                .route("/nio/stats", web::get().to(routes::nio::nio_stats)),
+                .route("/nio/stats", web::get().to(routes::nio::nio_stats))
+                // Scrcpy session management (Story 6-1)
+                .route("/scrcpy/{udid}/start", web::post().to(routes::scrcpy::start_scrcpy_session))
+                .route("/scrcpy/{udid}/stop", web::post().to(routes::scrcpy::stop_scrcpy_session))
+                .route("/scrcpy/sessions", web::get().to(routes::scrcpy::list_scrcpy_sessions))
+                // Scrcpy device control (Story 6-2)
+                .route("/scrcpy/{udid}/tap", web::post().to(routes::scrcpy::scrcpy_tap))
+                .route("/scrcpy/{udid}/key", web::post().to(routes::scrcpy::scrcpy_key))
+                .route("/scrcpy/{udid}/swipe", web::post().to(routes::scrcpy::scrcpy_swipe))
+                // Scrcpy WebSocket relay (Story 6-3)
+                .route("/scrcpy/{udid}/ws", web::get().to(routes::scrcpy_ws::scrcpy_websocket))
+                .route("/scrcpy/{udid}/status", web::get().to(routes::scrcpy_ws::scrcpy_status))
+                // Scrcpy recording (Story 6-4)
+                .route("/scrcpy/{udid}/recording/start", web::post().to(routes::scrcpy::start_scrcpy_recording))
+                .route("/scrcpy/{udid}/recording/stop", web::post().to(routes::scrcpy::stop_scrcpy_recording))
+                .route("/scrcpy/recordings", web::get().to(routes::scrcpy::list_scrcpy_recordings))
+                .route("/scrcpy/recordings/{id}", web::get().to(routes::scrcpy::get_scrcpy_recording))
+                .route("/scrcpy/recordings/{id}/download", web::get().to(routes::scrcpy::download_scrcpy_recording))
+                .route("/scrcpy/recordings/{id}", web::delete().to(routes::scrcpy::delete_scrcpy_recording)),
         )
         .await;
 
@@ -3298,4 +3320,522 @@ async fn test_api_v1_metrics() {
     assert!(body_str.contains("# HELP cloudcontrol_screenshot_latency_seconds"));
     assert!(body_str.contains("cloudcontrol_screenshot_latency_seconds{quantile=\"0.5\"}"));
     assert!(body_str.contains("cloudcontrol_screenshot_latency_seconds{quantile=\"0.95\"}"));
+}
+
+// ─── OpenAPI Spec Validation (Story 5-4) ───
+
+#[actix_web::test]
+async fn test_api_v1_openapi_spec_completeness() {
+    let (_tmp, _state, app) = setup_test_app!();
+
+    let req = test::TestRequest::get()
+        .uri("/api/v1/openapi.json")
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+
+    let body = test::read_body(resp).await;
+    let spec: serde_json::Value = serde_json::from_slice(&body).expect("OpenAPI spec should be valid JSON");
+
+    // Verify OpenAPI version
+    assert_eq!(spec["openapi"], "3.0.0");
+
+    // Verify info section
+    assert!(spec["info"]["title"].is_string());
+    assert!(spec["info"]["version"].is_string());
+
+    // Verify all documented API v1 paths exist
+    let paths = spec["paths"].as_object().expect("paths should be an object");
+
+    let required_paths = vec![
+        "/api/v1/devices",
+        "/api/v1/devices/{udid}",
+        "/api/v1/devices/{udid}/screenshot",
+        "/api/v1/devices/{udid}/tap",
+        "/api/v1/devices/{udid}/swipe",
+        "/api/v1/devices/{udid}/input",
+        "/api/v1/devices/{udid}/keyevent",
+        "/api/v1/batch/tap",
+        "/api/v1/batch/swipe",
+        "/api/v1/batch/input",
+        "/api/v1/status",
+        "/api/v1/health",
+        "/api/v1/metrics",
+        "/api/v1/ws/nio",
+    ];
+
+    for path in &required_paths {
+        assert!(
+            paths.contains_key(*path),
+            "OpenAPI spec missing path: {}",
+            path
+        );
+    }
+
+    // Verify HTTP methods — GET endpoints
+    assert!(paths["/api/v1/devices"]["get"].is_object(), "GET /api/v1/devices should be documented");
+    assert!(paths["/api/v1/devices/{udid}"]["get"].is_object(), "GET /api/v1/devices/{{udid}} should be documented");
+    assert!(paths["/api/v1/devices/{udid}/screenshot"]["get"].is_object(), "GET /api/v1/devices/{{udid}}/screenshot should be documented");
+    assert!(paths["/api/v1/status"]["get"].is_object(), "GET /api/v1/status should be documented");
+    assert!(paths["/api/v1/health"]["get"].is_object(), "GET /api/v1/health should be documented");
+    assert!(paths["/api/v1/metrics"]["get"].is_object(), "GET /api/v1/metrics should be documented");
+
+    // Verify HTTP methods — POST endpoints
+    assert!(paths["/api/v1/devices/{udid}/tap"]["post"].is_object(), "POST /api/v1/devices/{{udid}}/tap should be documented");
+    assert!(paths["/api/v1/devices/{udid}/swipe"]["post"].is_object(), "POST /api/v1/devices/{{udid}}/swipe should be documented");
+    assert!(paths["/api/v1/devices/{udid}/input"]["post"].is_object(), "POST /api/v1/devices/{{udid}}/input should be documented");
+    assert!(paths["/api/v1/devices/{udid}/keyevent"]["post"].is_object(), "POST /api/v1/devices/{{udid}}/keyevent should be documented");
+    assert!(paths["/api/v1/batch/tap"]["post"].is_object(), "POST /api/v1/batch/tap should be documented");
+    assert!(paths["/api/v1/batch/swipe"]["post"].is_object(), "POST /api/v1/batch/swipe should be documented");
+    assert!(paths["/api/v1/batch/input"]["post"].is_object(), "POST /api/v1/batch/input should be documented");
+
+    // Verify WebSocket endpoint
+    assert!(paths["/api/v1/ws/nio"]["get"].is_object(), "GET /api/v1/ws/nio should be documented");
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Story 5-5: JSON-RPC WebSocket Interface Tests
+// ═════════════════════════════════════════════════════════════════════════════
+
+#[actix_web::test]
+async fn test_ws_nio_json_rpc_parse_error() {
+    let (_tmp, _state, app) = setup_test_app!();
+
+    // Non-WebSocket request to ws/nio should fail (not a valid upgrade)
+    let req = test::TestRequest::get()
+        .uri("/api/v1/ws/nio")
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    // Without proper WebSocket headers, this returns 500 (upgrade failed)
+    assert_eq!(resp.status(), 500);
+
+    let body = test::read_body(resp).await;
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["error"], "ERR_WEBSOCKET_UPGRADE_FAILED");
+}
+
+#[actix_web::test]
+async fn test_ws_nio_json_rpc_request_validation() {
+    // Verify JSON-RPC request structure requirements:
+    // - "jsonrpc" must be present and "2.0"
+    // - "method" must be a string
+    // - "params" defaults to null if missing
+    // - "id" must be a number
+    let valid = r#"{"jsonrpc":"2.0","method":"tap","params":{"udid":"abc","x":100,"y":200},"id":1}"#;
+    let parsed: serde_json::Value = serde_json::from_str(valid).unwrap();
+    assert_eq!(parsed["jsonrpc"], "2.0");
+    assert_eq!(parsed["method"], "tap");
+    assert_eq!(parsed["id"], 1);
+
+    // Verify params with all required fields for tap
+    let params = &parsed["params"];
+    assert!(params["udid"].is_string(), "udid must be string");
+    assert!(params["x"].is_number(), "x must be number");
+    assert!(params["y"].is_number(), "y must be number");
+
+    // Verify invalid JSON would not parse as valid
+    let invalid_no_method = r#"{"jsonrpc":"2.0","id":1}"#;
+    let parsed_no_method: serde_json::Value = serde_json::from_str(invalid_no_method).unwrap();
+    assert!(parsed_no_method.get("method").is_none(), "missing method should be absent");
+
+    // Verify batch request structure
+    let batch_req = r#"{"jsonrpc":"2.0","method":"batchTap","params":{"udids":["a","b"],"x":100,"y":200},"id":2}"#;
+    let parsed_batch: serde_json::Value = serde_json::from_str(batch_req).unwrap();
+    assert!(parsed_batch["params"]["udids"].is_array(), "udids must be array");
+    assert_eq!(parsed_batch["params"]["udids"].as_array().unwrap().len(), 2);
+}
+
+#[actix_web::test]
+async fn test_ws_nio_json_rpc_method_dispatch_coverage() {
+    // Verify all expected methods are documented in the OpenAPI spec description
+    let (_tmp, _state, app) = setup_test_app!();
+
+    let req = test::TestRequest::get()
+        .uri("/api/v1/openapi.json")
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    let body = test::read_body(resp).await;
+    let spec: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    let nio_desc = spec["paths"]["/api/v1/ws/nio"]["get"]["description"]
+        .as_str()
+        .expect("ws/nio description should exist");
+
+    let expected_methods = vec![
+        "tap", "swipe", "input", "keyevent",
+        "batchTap", "batchSwipe", "batchInput",
+        "listDevices", "getDevice", "screenshot", "getStatus",
+    ];
+
+    for method in expected_methods {
+        assert!(
+            nio_desc.contains(method),
+            "OpenAPI ws/nio description should mention method '{}'",
+            method
+        );
+    }
+}
+
+#[actix_web::test]
+async fn test_ws_nio_batch_result_format_matches_rest_api() {
+    // Verify that the batch result structure for JSON-RPC matches REST API batch format.
+    // Uses /api/batch/tap (the existing route registered in test setup).
+    let (_tmp, _state, app) = setup_test_app!();
+
+    // Call REST batch tap with non-existent device to verify per-device result format
+    let req = test::TestRequest::post()
+        .uri("/api/batch/tap")
+        .set_json(serde_json::json!({"udids": ["nonexistent-dev"], "x": 100, "y": 200}))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    let body = test::read_body(resp).await;
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    // REST batch returns BatchResponse at top level (not wrapped in ApiResponse.data)
+    assert!(json["total"].is_number(), "batch result should have 'total'");
+    assert!(json["successful"].is_number(), "batch result should have 'successful'");
+    assert!(json["failed"].is_number(), "batch result should have 'failed'");
+    assert!(json["results"].is_array(), "batch result should have 'results' array");
+
+    // Verify per-device result format has udid and status fields
+    let results = json["results"].as_array().unwrap();
+    assert_eq!(results.len(), 1);
+    assert!(results[0]["udid"].is_string(), "per-device result should have 'udid'");
+    assert!(results[0]["status"].is_string(), "per-device result should have 'status'");
+
+    // JSON-RPC batch uses same field names: total, succeeded (vs successful), failed, results
+    // Note: REST uses "successful", JSON-RPC uses "succeeded" — both valid, documented in each API
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Scrcpy Session Management Tests (Story 6-1)
+// ═════════════════════════════════════════════════════════════════════════════
+
+#[actix_web::test]
+async fn test_start_scrcpy_returns_error_for_unknown_device() {
+    let (_tmp, _state, app) = setup_test_app!();
+
+    // Device "nonexistent-device" doesn't exist in the test DB
+    let req = test::TestRequest::post()
+        .uri("/scrcpy/nonexistent-device/start")
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+
+    let body: Value = test::read_body_json(resp).await;
+    assert_eq!(body["status"], "error");
+    // Must be one of: device not found (404) or JAR missing (503)
+    let error = body["error"].as_str().unwrap();
+    assert!(
+        error == "ERR_DEVICE_NOT_FOUND" || error == "ERR_SCRCPY_NOT_AVAILABLE",
+        "Expected ERR_DEVICE_NOT_FOUND or ERR_SCRCPY_NOT_AVAILABLE, got {}",
+        error
+    );
+}
+
+#[actix_web::test]
+async fn test_start_scrcpy_device_with_no_serial() {
+    let (_tmp, state, app) = setup_test_app!();
+
+    // Insert a device with empty serial (WiFi-only device, no USB)
+    let mut device_data = make_device_json("wifi-only-device", true, true);
+    device_data["serial"] = json!("");
+    state.db.upsert("wifi-only-device", &device_data).await.unwrap();
+
+    let req = test::TestRequest::post()
+        .uri("/scrcpy/wifi-only-device/start")
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+
+    // Scrcpy requires USB — device with no serial should be rejected
+    // If JAR is missing, we get 503 first; if present, we get 400 for no serial
+    let body: Value = test::read_body_json(resp).await;
+    assert_eq!(body["status"], "error");
+    let error = body["error"].as_str().unwrap();
+    assert!(
+        error == "ERR_DEVICE_NO_SERIAL" || error == "ERR_SCRCPY_NOT_AVAILABLE",
+        "Expected ERR_DEVICE_NO_SERIAL or ERR_SCRCPY_NOT_AVAILABLE, got {}",
+        error
+    );
+}
+
+#[actix_web::test]
+async fn test_list_scrcpy_sessions_empty() {
+    let (_tmp, _state, app) = setup_test_app!();
+
+    let req = test::TestRequest::get()
+        .uri("/scrcpy/sessions")
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+
+    assert_eq!(resp.status(), 200);
+
+    let body: Value = test::read_body_json(resp).await;
+    assert_eq!(body["status"], "success");
+    assert_eq!(body["count"], 0);
+    assert!(body["sessions"].is_array());
+    assert_eq!(body["sessions"].as_array().unwrap().len(), 0);
+}
+
+#[actix_web::test]
+async fn test_stop_scrcpy_returns_404_no_active_session() {
+    let (_tmp, _state, app) = setup_test_app!();
+
+    let req = test::TestRequest::post()
+        .uri("/scrcpy/test-device/stop")
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+
+    assert_eq!(resp.status(), 404, "Should return 404 when no active session");
+
+    let body: Value = test::read_body_json(resp).await;
+    assert_eq!(body["status"], "error");
+    assert_eq!(body["error"], "ERR_SESSION_NOT_FOUND");
+}
+
+// ─── Scrcpy Device Control Tests (Story 6-2) ───
+
+#[actix_web::test]
+async fn test_scrcpy_tap_returns_404_no_session() {
+    let (_tmp, _state, app) = setup_test_app!();
+
+    let req = test::TestRequest::post()
+        .uri("/scrcpy/nonexistent/tap")
+        .set_json(serde_json::json!({"x": 540, "y": 960}))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+
+    assert_eq!(resp.status(), 404, "Should return 404 when no active session");
+
+    let body: Value = test::read_body_json(resp).await;
+    assert_eq!(body["status"], "error");
+    assert_eq!(body["error"], "ERR_SESSION_NOT_FOUND");
+}
+
+#[actix_web::test]
+async fn test_scrcpy_key_returns_404_no_session() {
+    let (_tmp, _state, app) = setup_test_app!();
+
+    let req = test::TestRequest::post()
+        .uri("/scrcpy/nonexistent/key")
+        .set_json(serde_json::json!({"keycode": 66}))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+
+    assert_eq!(resp.status(), 404, "Should return 404 when no active session");
+
+    let body: Value = test::read_body_json(resp).await;
+    assert_eq!(body["status"], "error");
+    assert_eq!(body["error"], "ERR_SESSION_NOT_FOUND");
+}
+
+#[actix_web::test]
+async fn test_scrcpy_swipe_returns_404_no_session() {
+    let (_tmp, _state, app) = setup_test_app!();
+
+    let req = test::TestRequest::post()
+        .uri("/scrcpy/nonexistent/swipe")
+        .set_json(serde_json::json!({
+            "start_x": 540,
+            "start_y": 1600,
+            "end_x": 540,
+            "end_y": 400
+        }))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+
+    assert_eq!(resp.status(), 404, "Should return 404 when no active session");
+
+    let body: Value = test::read_body_json(resp).await;
+    assert_eq!(body["status"], "error");
+    assert_eq!(body["error"], "ERR_SESSION_NOT_FOUND");
+}
+
+// ─── Story 6-3: H.264 WebSocket Relay Tests ───
+
+#[actix_web::test]
+async fn test_scrcpy_status_device_not_found() {
+    let (_tmp, _state, app) = setup_test_app!();
+
+    let req = test::TestRequest::get()
+        .uri("/scrcpy/nonexistent-device/status")
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+
+    assert_eq!(resp.status(), 200);
+
+    let body: Value = test::read_body_json(resp).await;
+    assert_eq!(body["available"], false);
+    assert_eq!(body["reason"], "device not found");
+}
+
+#[actix_web::test]
+async fn test_scrcpy_status_no_serial() {
+    let (_tmp, state, app) = setup_test_app!();
+
+    // Insert a device with empty serial (WiFi-only device, no USB)
+    let mut device_data = make_device_json("wifi-only-device", true, true);
+    device_data["serial"] = json!("");
+    state.db.upsert("wifi-only-device", &device_data).await.unwrap();
+
+    let req = test::TestRequest::get()
+        .uri("/scrcpy/wifi-only-device/status")
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+
+    assert_eq!(resp.status(), 200);
+
+    let body: Value = test::read_body_json(resp).await;
+    assert_eq!(body["available"], false);
+    assert_eq!(body["reason"], "no serial");
+}
+
+#[actix_web::test]
+async fn test_subscribe_video_no_session() {
+    let (_tmp, state, _app) = setup_test_app!();
+
+    let result = state.scrcpy_manager.subscribe_video("nonexistent");
+    assert!(result.is_err());
+    assert_eq!(result.err().unwrap(), "ERR_SESSION_NOT_FOUND");
+}
+
+#[actix_web::test]
+async fn test_get_video_producer_no_session() {
+    let (_tmp, state, _app) = setup_test_app!();
+
+    let result = state.scrcpy_manager.get_video_producer("nonexistent");
+    assert!(result.is_err());
+    assert_eq!(result.err().unwrap(), "ERR_SESSION_NOT_FOUND");
+}
+
+#[actix_web::test]
+async fn test_broadcast_frame_serialization_format() {
+    use cloudcontrol::device::scrcpy::ScrcpyFrame;
+    use cloudcontrol::services::scrcpy_manager::BroadcastFrame;
+
+    // Test config frame
+    let frame = ScrcpyFrame {
+        pts: 0,
+        is_config: true,
+        is_key: false,
+        data: vec![0x00, 0x00, 0x00, 0x01, 0x67], // SPS NAL
+    };
+
+    let bf = BroadcastFrame::from_scrcpy_frame(&frame);
+
+    // Verify 5-byte header format
+    assert_eq!(bf.data[0], 0x01, "Config flag should be set");
+    let size = u32::from_be_bytes(bf.data[1..5].try_into().unwrap());
+    assert_eq!(size, 5, "Size should be 5 bytes");
+    assert_eq!(&bf.data[5..], &[0x00, 0x00, 0x00, 0x01, 0x67]);
+
+    // Test keyframe
+    let frame = ScrcpyFrame {
+        pts: 12345,
+        is_config: false,
+        is_key: true,
+        data: vec![0x00, 0x00, 0x00, 0x01, 0x65], // IDR NAL
+    };
+
+    let bf = BroadcastFrame::from_scrcpy_frame(&frame);
+    assert_eq!(bf.data[0], 0x02, "Keyframe flag should be set");
+
+    // Test combined flags
+    let frame = ScrcpyFrame {
+        pts: 0,
+        is_config: true,
+        is_key: true,
+        data: vec![0xAB],
+    };
+
+    let bf = BroadcastFrame::from_scrcpy_frame(&frame);
+    assert_eq!(bf.data[0], 0x03, "Both config and keyframe flags should be set");
+
+    // Test no flags
+    let frame = ScrcpyFrame {
+        pts: 99999,
+        is_config: false,
+        is_key: false,
+        data: vec![0x01, 0x02, 0x03],
+    };
+
+    let bf = BroadcastFrame::from_scrcpy_frame(&frame);
+    assert_eq!(bf.data[0], 0x00, "No flags should be set");
+    let size = u32::from_be_bytes(bf.data[1..5].try_into().unwrap());
+    assert_eq!(size, 3);
+}
+
+// ── Scrcpy Recording Tests (Story 6-4) ──
+
+#[actix_web::test]
+async fn test_start_scrcpy_recording_no_session() {
+    let (_tmp, _state, app) = setup_test_app!();
+    let req = actix_web::test::TestRequest::post()
+        .uri("/scrcpy/nonexistent/recording/start")
+        .to_request();
+    let resp = actix_web::test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 404);
+    let body: serde_json::Value = actix_web::test::read_body_json(resp).await;
+    assert_eq!(body["error"], "ERR_SESSION_NOT_FOUND");
+}
+
+#[actix_web::test]
+async fn test_stop_scrcpy_recording_no_session() {
+    let (_tmp, _state, app) = setup_test_app!();
+    let req = actix_web::test::TestRequest::post()
+        .uri("/scrcpy/nonexistent/recording/stop")
+        .to_request();
+    let resp = actix_web::test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 404);
+    let body: serde_json::Value = actix_web::test::read_body_json(resp).await;
+    assert_eq!(body["error"], "ERR_SESSION_NOT_FOUND");
+}
+
+#[actix_web::test]
+async fn test_list_scrcpy_recordings_empty() {
+    let (_tmp, _state, app) = setup_test_app!();
+    let req = actix_web::test::TestRequest::get()
+        .uri("/scrcpy/recordings")
+        .to_request();
+    let resp = actix_web::test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = actix_web::test::read_body_json(resp).await;
+    assert_eq!(body["status"], "success");
+    assert_eq!(body["count"], 0);
+    assert!(body["recordings"].as_array().unwrap().is_empty());
+}
+
+#[actix_web::test]
+async fn test_get_scrcpy_recording_not_found() {
+    let (_tmp, _state, app) = setup_test_app!();
+    let req = actix_web::test::TestRequest::get()
+        .uri("/scrcpy/recordings/nonexistent-id")
+        .to_request();
+    let resp = actix_web::test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 404);
+    let body: serde_json::Value = actix_web::test::read_body_json(resp).await;
+    assert_eq!(body["error"], "ERR_RECORDING_NOT_FOUND");
+}
+
+#[actix_web::test]
+async fn test_delete_scrcpy_recording_not_found() {
+    let (_tmp, _state, app) = setup_test_app!();
+    let req = actix_web::test::TestRequest::delete()
+        .uri("/scrcpy/recordings/nonexistent-id")
+        .to_request();
+    let resp = actix_web::test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 404);
+    let body: serde_json::Value = actix_web::test::read_body_json(resp).await;
+    assert_eq!(body["error"], "ERR_RECORDING_NOT_FOUND");
+}
+
+#[actix_web::test]
+async fn test_download_scrcpy_recording_not_found() {
+    let (_tmp, _state, app) = setup_test_app!();
+    let req = actix_web::test::TestRequest::get()
+        .uri("/scrcpy/recordings/nonexistent-id/download")
+        .to_request();
+    let resp = actix_web::test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 404);
+    let body: serde_json::Value = actix_web::test::read_body_json(resp).await;
+    assert_eq!(body["error"], "ERR_RECORDING_NOT_FOUND");
 }

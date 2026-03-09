@@ -1,15 +1,15 @@
-use crate::device::adb::Adb;
-use crate::device::scrcpy::ScrcpySession;
 use crate::services::scrcpy_manager::ScrcpyManager;
 use crate::state::AppState;
 use actix_web::{web, HttpRequest, HttpResponse};
 use futures::StreamExt;
 use serde_json::json;
-use std::sync::Arc;
-use tokio::io::AsyncWriteExt;
-use tokio::sync::Mutex;
+use tokio::sync::broadcast;
 
-/// GET /scrcpy/{udid}/ws → Binary WebSocket for scrcpy video + control
+/// GET /scrcpy/{udid}/ws → Binary WebSocket for scrcpy video + control.
+///
+/// Connects to an existing managed scrcpy session (started via POST /scrcpy/{udid}/start).
+/// Multiple clients can connect simultaneously — all receive the same broadcast frames.
+/// Control messages (touch/key) are forwarded to the scrcpy control socket.
 pub async fn scrcpy_websocket(
     state: web::Data<AppState>,
     req: HttpRequest,
@@ -30,16 +30,33 @@ pub async fn scrcpy_websocket(
     let udid_clone = udid.clone();
 
     actix_web::rt::spawn(async move {
-        // Look up device serial from DB
-        let phone_service =
-            crate::services::phone_service::PhoneService::new(state.db.clone());
-        let device = match phone_service.query_info_by_udid(&udid_clone).await {
-            Ok(Some(d)) => d,
-            _ => {
+        // Look up managed session — must already be started via REST
+        let (info, control_handle) =
+            match state.scrcpy_manager.get_session_with_info(&udid_clone) {
+                Ok(v) => v,
+                Err(_) => {
+                    let _ = session
+                        .text(
+                            serde_json::to_string(&json!({
+                                "type": "error",
+                                "message": format!("No active scrcpy session for device '{}'. Start one with POST /scrcpy/{}/start", udid_clone, udid_clone)
+                            }))
+                            .unwrap(),
+                        )
+                        .await;
+                    let _ = session.close(None).await;
+                    return;
+                }
+            };
+
+        // Subscribe to broadcast channel for video frames
+        let mut video_rx = match state.scrcpy_manager.subscribe_video(&udid_clone) {
+            Ok(rx) => rx,
+            Err(_) => {
                 let _ = session
                     .text(
                         serde_json::to_string(
-                            &json!({"type":"error","message":"Device not found"}),
+                            &json!({"type": "error", "message": "Session disappeared during connect"}),
                         )
                         .unwrap(),
                     )
@@ -49,120 +66,76 @@ pub async fn scrcpy_websocket(
             }
         };
 
-        let serial = device
-            .get("serial")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-
-        if serial.is_empty() {
-            let _ = session
-                .text(
-                    serde_json::to_string(
-                        &json!({"type":"error","message":"Device serial not found"}),
-                    )
-                    .unwrap(),
-                )
-                .await;
-            let _ = session.close(None).await;
-            return;
-        }
-
-        tracing::info!("[Scrcpy WS] Starting session for {} ({})", udid_clone, serial);
-
-        // Start scrcpy session
-        let scrcpy = match ScrcpySession::start(&serial).await {
-            Ok(s) => s,
-            Err(e) => {
-                tracing::error!("[Scrcpy WS] Failed to start scrcpy for {}: {}", serial, e);
-                let _ = session
-                    .text(
-                        serde_json::to_string(
-                            &json!({"type":"error","message": format!("scrcpy start failed: {}", e)}),
-                        )
-                        .unwrap(),
-                    )
-                    .await;
-                let _ = session.close(None).await;
-                return;
-            }
-        };
-
-        let meta = scrcpy.meta.clone();
-
-        // Send init message with codec and dimensions
+        // AC3: Send metadata init message (JSON text frame) before binary frames
         let init_msg = json!({
             "type": "init",
             "codec": "h264",
-            "width": meta.width,
-            "height": meta.height,
-            "deviceName": meta.device_name,
+            "width": info.width,
+            "height": info.height,
+            "deviceName": info.device_name,
         });
         if session
             .text(serde_json::to_string(&init_msg).unwrap())
             .await
             .is_err()
         {
-            scrcpy.shutdown().await;
             return;
         }
 
         tracing::info!(
-            "[Scrcpy WS] Session active: {} ({}x{})",
-            serial,
-            meta.width,
-            meta.height
+            "[Scrcpy WS] Viewer connected for {} ({}x{})",
+            udid_clone,
+            info.width,
+            info.height
         );
 
-        // Split scrcpy session for concurrent video read + control write
-        let scrcpy = Arc::new(Mutex::new(scrcpy));
-        let scrcpy_video = scrcpy.clone();
-        let scrcpy_control = scrcpy.clone();
-
+        // Spawn video consumer task: receives broadcast frames → sends to this WS client
         let session_clone = session.clone();
-        let serial_clone = serial.clone();
-
-        // Video task: read frames and send as binary WS messages
+        let udid_video = udid_clone.clone();
         let video_task = tokio::spawn(async move {
             let mut session = session_clone;
             loop {
-                let frame = {
-                    let mut s = scrcpy_video.lock().await;
-                    s.read_frame().await
-                };
-
-                match frame {
+                match video_rx.recv().await {
                     Ok(frame) => {
-                        // Binary message format:
-                        // flags (1 byte): bit0 = config, bit1 = keyframe
-                        // size (4 bytes BE): NAL data size
-                        // data: H.264 NAL units
-                        let flags: u8 =
-                            (if frame.is_config { 1 } else { 0 }) | (if frame.is_key { 2 } else { 0 });
-                        let size = (frame.data.len() as u32).to_be_bytes();
-
-                        let mut msg = Vec::with_capacity(5 + frame.data.len());
-                        msg.push(flags);
-                        msg.extend_from_slice(&size);
-                        msg.extend_from_slice(&frame.data);
-
-                        if session.binary(msg).await.is_err() {
-                            break;
+                        // Frame is pre-serialized (flags + size + NAL data).
+                        // Bytes::clone() is O(1) — just increments a ref count.
+                        if session.binary(frame.data.clone()).await.is_err() {
+                            break; // Client disconnected
                         }
                     }
-                    Err(e) => {
-                        tracing::warn!("[Scrcpy WS] Video read error for {}: {}", serial_clone, e);
+                    Err(broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::debug!(
+                            "[Scrcpy WS] Viewer for {} lagged, skipped {} frames",
+                            udid_video,
+                            n
+                        );
+                        continue;
+                    }
+                    Err(broadcast::error::RecvError::Closed) => {
+                        tracing::info!(
+                            "[Scrcpy WS] Broadcast closed for {} (session stopped)",
+                            udid_video
+                        );
+                        let _ = session
+                            .text(
+                                serde_json::to_string(
+                                    &json!({"type": "error", "message": "Session stopped"}),
+                                )
+                                .unwrap(),
+                            )
+                            .await;
+                        let _ = session.close(None).await;
                         break;
                     }
                 }
             }
         });
 
-        // Control receive: browser WS binary → scrcpy control socket
+        // Control receive loop: browser WS binary → scrcpy control socket
         while let Some(Ok(msg)) = msg_stream.next().await {
             match msg {
                 actix_ws::Message::Binary(data) => {
-                    let mut s = scrcpy_control.lock().await;
+                    let mut s = control_handle.lock().await;
                     // Forward raw binary directly to scrcpy control socket
                     if data.len() >= 2 {
                         let msg_type = data[0];
@@ -170,26 +143,50 @@ pub async fn scrcpy_websocket(
                             // Touch event from browser (28 bytes)
                             2 => {
                                 if data.len() >= 28 {
-                                    if let Err(e) = s.send_touch(
-                                        data[1],
-                                        u32::from_be_bytes(data[10..14].try_into().unwrap()),
-                                        u32::from_be_bytes(data[14..18].try_into().unwrap()),
-                                        u16::from_be_bytes(data[18..20].try_into().unwrap()),
-                                        u16::from_be_bytes(data[20..22].try_into().unwrap()),
-                                        u16::from_be_bytes(data[22..24].try_into().unwrap()),
-                                    ).await {
-                                        tracing::warn!("[Scrcpy WS] Touch send error: {}", e);
+                                    if let Err(e) = s
+                                        .send_touch(
+                                            data[1],
+                                            u32::from_be_bytes(
+                                                data[10..14].try_into().unwrap(),
+                                            ),
+                                            u32::from_be_bytes(
+                                                data[14..18].try_into().unwrap(),
+                                            ),
+                                            u16::from_be_bytes(
+                                                data[18..20].try_into().unwrap(),
+                                            ),
+                                            u16::from_be_bytes(
+                                                data[20..22].try_into().unwrap(),
+                                            ),
+                                            u16::from_be_bytes(
+                                                data[22..24].try_into().unwrap(),
+                                            ),
+                                        )
+                                        .await
+                                    {
+                                        tracing::warn!(
+                                            "[Scrcpy WS] Touch send error: {}",
+                                            e
+                                        );
                                     }
                                 }
                             }
                             // Key event from browser (14 bytes)
                             0 => {
                                 if data.len() >= 14 {
-                                    if let Err(e) = s.send_key(
-                                        data[1],
-                                        u32::from_be_bytes(data[2..6].try_into().unwrap()),
-                                    ).await {
-                                        tracing::warn!("[Scrcpy WS] Key send error: {}", e);
+                                    if let Err(e) = s
+                                        .send_key(
+                                            data[1],
+                                            u32::from_be_bytes(
+                                                data[2..6].try_into().unwrap(),
+                                            ),
+                                        )
+                                        .await
+                                    {
+                                        tracing::warn!(
+                                            "[Scrcpy WS] Key send error: {}",
+                                            e
+                                        );
                                     }
                                 }
                             }
@@ -202,19 +199,11 @@ pub async fn scrcpy_websocket(
             }
         }
 
-        // Cleanup
+        // Cleanup: abort video consumer task for this viewer and close WS
         video_task.abort();
-        {
-            let mut s = scrcpy.lock().await;
-            let _ = s.video_stream.shutdown().await;
-            let _ = s.control_stream.shutdown().await;
-            if let Some(mut proc) = s.server_process.take() {
-                let _ = proc.kill().await;
-            }
-            let _ = Adb::forward_remove(&s.serial, s.local_port).await;
-        }
+        let _ = session.close(None).await;
 
-        tracing::info!("[Scrcpy WS] Session closed for {}", udid_clone);
+        tracing::info!("[Scrcpy WS] Viewer disconnected for {}", udid_clone);
     });
 
     resp
@@ -232,7 +221,8 @@ pub async fn scrcpy_status(
     let device = match phone_service.query_info_by_udid(&udid).await {
         Ok(Some(d)) => d,
         _ => {
-            return HttpResponse::Ok().json(json!({"available": false, "reason": "device not found"}));
+            return HttpResponse::Ok()
+                .json(json!({"available": false, "reason": "device not found"}));
         }
     };
 

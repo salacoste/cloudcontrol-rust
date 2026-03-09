@@ -1,0 +1,153 @@
+// Jenkinsfile for cloudcontrol-rust device testing
+//
+// Prerequisites:
+//   - cloudcontrol-rust running and accessible from Jenkins agent
+//   - Android devices connected to the device farm
+//   - curl and jq installed on the agent
+
+pipeline {
+    agent any
+
+    parameters {
+        string(name: 'CLOUDCONTROL_URL', defaultValue: 'http://localhost:8000', description: 'cloudcontrol-rust server URL')
+        string(name: 'MIN_DEVICES', defaultValue: '1', description: 'Minimum devices required')
+        string(name: 'SCREENSHOT_QUALITY', defaultValue: '80', description: 'Screenshot JPEG quality (1-100)')
+    }
+
+    environment {
+        CLOUDCONTROL_URL = "${params.CLOUDCONTROL_URL}"
+    }
+
+    options {
+        timeout(time: 15, unit: 'MINUTES')
+        timestamps()
+    }
+
+    stages {
+        stage('Health Check') {
+            steps {
+                script {
+                    def healthy = false
+                    for (int i = 0; i < 60; i++) {
+                        def status = sh(script: """
+                            curl -s -o /dev/null -w '%{http_code}' \
+                                '${CLOUDCONTROL_URL}/api/v1/health' 2>/dev/null || echo '000'
+                        """, returnStdout: true).trim()
+                        if (status == '200') {
+                            healthy = true
+                            echo "Health check passed."
+                            break
+                        }
+                        echo "Attempt ${i + 1}/60 — status: ${status}"
+                        sleep 2
+                    }
+                    if (!healthy) {
+                        error("Health check failed after 120s")
+                    }
+                }
+            }
+        }
+
+        stage('Device Discovery') {
+            steps {
+                script {
+                    def response = sh(script: """
+                        curl -sf '${CLOUDCONTROL_URL}/api/v1/devices'
+                    """, returnStdout: true).trim()
+
+                    def json = readJSON text: response
+                    if (json.status != 'success') {
+                        error("Device list failed: ${json.error ?: json.message ?: 'unknown'}")
+                    }
+
+                    env.DEVICE_COUNT = json.data.size().toString()
+                    env.DEVICE_UDIDS = json.data.collect { it.udid }.join(',')
+
+                    echo "Found ${env.DEVICE_COUNT} device(s): ${env.DEVICE_UDIDS}"
+
+                    if (json.data.size() < params.MIN_DEVICES.toInteger()) {
+                        error("Not enough devices: ${json.data.size()} < ${params.MIN_DEVICES}")
+                    }
+                }
+            }
+        }
+
+        stage('Parallel Device Testing') {
+            steps {
+                script {
+                    def udids = env.DEVICE_UDIDS.split(',')
+                    def parallelStages = [:]
+
+                    udids.each { udid ->
+                        parallelStages["Test ${udid}"] = {
+                            // Capture screenshot — pass values via env to avoid shell injection
+                            withEnv(["DEVICE_UDID=${udid}", "SHOT_QUALITY=${params.SCREENSHOT_QUALITY}"]) {
+                                sh '''
+                                    mkdir -p screenshots
+                                    response=$(curl -sf "${CLOUDCONTROL_URL}/api/v1/devices/${DEVICE_UDID}/screenshot?quality=${SHOT_QUALITY}")
+                                    shot_status=$(echo "$response" | jq -r '.status')
+                                    if [ "$shot_status" = "success" ]; then
+                                        echo "$response" | jq -r '.data.data' | base64 -d > "screenshots/${DEVICE_UDID}.jpg"
+                                        echo "Screenshot saved: screenshots/${DEVICE_UDID}.jpg"
+                                    else
+                                        echo "WARNING: Screenshot failed for ${DEVICE_UDID}"
+                                    fi
+                                '''
+                            }
+
+                            // Tap test — pass values via env to avoid shell injection
+                            withEnv(["DEVICE_UDID=${udid}"]) {
+                                sh '''
+                                    response=$(curl -sf -X POST \
+                                        -H 'Content-Type: application/json' \
+                                        -d '{"x": 540, "y": 960}' \
+                                        "${CLOUDCONTROL_URL}/api/v1/devices/${DEVICE_UDID}/tap")
+                                    tap_status=$(echo "$response" | jq -r '.status')
+                                    if [ "$tap_status" = "success" ]; then
+                                        echo "Tap succeeded on ${DEVICE_UDID}"
+                                    else
+                                        echo "WARNING: Tap failed on ${DEVICE_UDID}"
+                                    fi
+                                '''
+                            }
+                        }
+                    }
+
+                    parallel parallelStages
+                }
+            }
+        }
+
+        stage('Report Generation') {
+            steps {
+                script {
+                    // Fetch device status summary
+                    def statusResponse = sh(script: """
+                        curl -sf '${CLOUDCONTROL_URL}/api/v1/status'
+                    """, returnStdout: true).trim()
+                    echo "Device Status Summary:"
+                    echo statusResponse
+
+                    // Fetch metrics
+                    def metricsResponse = sh(script: """
+                        curl -sf '${CLOUDCONTROL_URL}/api/v1/metrics'
+                    """, returnStdout: true).trim()
+                    echo "Prometheus Metrics:"
+                    echo metricsResponse
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            archiveArtifacts artifacts: 'screenshots/**', allowEmptyArchive: true
+        }
+        success {
+            echo "Device farm testing completed successfully."
+        }
+        failure {
+            echo "Device farm testing failed. Check logs for details."
+        }
+    }
+}

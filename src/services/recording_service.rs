@@ -3,6 +3,7 @@ use crate::models::recording::{
     StartRecordingResponse, RecordActionResponse, StopRecordingResponse,
     StopRecordingRequest, ListRecordingsResponse, RecordingWithActions,
     EditActionRequest, RecordingStatusResponse,
+    StartPlaybackRequest, StartPlaybackResponse, PlaybackStatusResponse,
 };
 use sqlx::Row;
 use std::collections::{HashMap, HashSet};
@@ -15,6 +16,26 @@ use tokio::sync::RwLock;
 pub struct RecordingStateInner {
     active_recordings: HashMap<String, i64>,
     paused_recordings: HashSet<String>,
+    /// Playback state: device_udid -> PlaybackSession
+    playback_sessions: HashMap<String, PlaybackSession>,
+}
+
+/// Represents an active playback session for a device
+#[derive(Clone)]
+pub struct PlaybackSession {
+    pub recording_id: i64,
+    pub current_action_index: i32,
+    pub speed: f32,
+    pub target_device_udid: String,
+    pub status: PlaybackStatus,
+}
+
+#[derive(Clone, PartialEq)]
+pub enum PlaybackStatus {
+    Playing,
+    Paused,
+    Stopped,
+    Completed,
 }
 
 /// Thread-safe wrapper for recording state.
@@ -97,6 +118,98 @@ impl RecordingState {
         state.paused_recordings.remove(device_udid);
         state.active_recordings.remove(device_udid)
     }
+
+    // ==================== Playback State Management ====================
+
+    /// Start playback for a device
+    pub async fn start_playback(
+        &self,
+        target_device_udid: &str,
+        recording_id: i64,
+        speed: f32,
+    ) -> Result<(), String> {
+        let mut state = self.inner.write().await;
+        if state.playback_sessions.contains_key(target_device_udid) {
+            return Err("ERR_PLAYBACK_ALREADY_ACTIVE".to_string());
+        }
+        state.playback_sessions.insert(
+            target_device_udid.to_string(),
+            PlaybackSession {
+                recording_id,
+                current_action_index: 0,
+                speed,
+                target_device_udid: target_device_udid.to_string(),
+                status: PlaybackStatus::Playing,
+            },
+        );
+        Ok(())
+    }
+
+    /// Stop playback for a device
+    pub async fn stop_playback(&self, target_device_udid: &str) -> Option<PlaybackSession> {
+        let mut state = self.inner.write().await;
+        state.playback_sessions.remove(target_device_udid)
+    }
+
+    /// Pause playback for a device
+    pub async fn pause_playback(&self, target_device_udid: &str) -> Result<(), String> {
+        let mut state = self.inner.write().await;
+        if let Some(session) = state.playback_sessions.get_mut(target_device_udid) {
+            if session.status != PlaybackStatus::Playing {
+                return Err("ERR_PLAYBACK_NOT_PLAYING".to_string());
+            }
+            session.status = PlaybackStatus::Paused;
+            Ok(())
+        } else {
+            Err("ERR_NO_ACTIVE_PLAYBACK".to_string())
+        }
+    }
+
+    /// Resume playback for a device
+    pub async fn resume_playback(&self, target_device_udid: &str) -> Result<(), String> {
+        let mut state = self.inner.write().await;
+        if let Some(session) = state.playback_sessions.get_mut(target_device_udid) {
+            if session.status != PlaybackStatus::Paused {
+                return Err("ERR_PLAYBACK_NOT_PAUSED".to_string());
+            }
+            session.status = PlaybackStatus::Playing;
+            Ok(())
+        } else {
+            Err("ERR_NO_ACTIVE_PLAYBACK".to_string())
+        }
+    }
+
+    /// Get playback session for a device
+    pub async fn get_playback(&self, target_device_udid: &str) -> Option<PlaybackSession> {
+        self.inner.read().await.playback_sessions.get(target_device_udid).cloned()
+    }
+
+    /// Update playback progress (increment action index)
+    pub async fn increment_playback_progress(&self, target_device_udid: &str) -> Result<i32, String> {
+        let mut state = self.inner.write().await;
+        if let Some(session) = state.playback_sessions.get_mut(target_device_udid) {
+            session.current_action_index += 1;
+            Ok(session.current_action_index)
+        } else {
+            Err("ERR_NO_ACTIVE_PLAYBACK".to_string())
+        }
+    }
+
+    /// Mark playback as completed
+    pub async fn complete_playback(&self, target_device_udid: &str) -> Result<(), String> {
+        let mut state = self.inner.write().await;
+        if let Some(session) = state.playback_sessions.get_mut(target_device_udid) {
+            session.status = PlaybackStatus::Completed;
+            Ok(())
+        } else {
+            Err("ERR_NO_ACTIVE_PLAYBACK".to_string())
+        }
+    }
+
+    /// Check if device has active playback
+    pub async fn is_playing(&self, target_device_udid: &str) -> bool {
+        self.inner.read().await.playback_sessions.contains_key(target_device_udid)
+    }
 }
 
 /// Service for managing recording sessions.
@@ -164,6 +277,11 @@ impl RecordingService {
             .get_active_recording(device_udid)
             .await
             .ok_or_else(|| "ERR_NO_ACTIVE_RECORDING".to_string())?;
+
+        // Check if recording is paused
+        if self.recording_state.is_paused(device_udid).await {
+            return Err("ERR_RECORDING_PAUSED".to_string());
+        }
 
         // Get next sequence order
         let sequence_order: i32 = sqlx::query_scalar(
@@ -575,5 +693,136 @@ impl RecordingService {
     pub async fn should_capture(&self, device_udid: &str) -> bool {
         self.recording_state.is_recording(device_udid).await
             && !self.recording_state.is_paused(device_udid).await
+    }
+
+    // ==================== Playback Methods ====================
+
+    /// Start playback of a recording on a target device.
+    pub async fn start_playback(
+        &self,
+        recording_id: i64,
+        request: StartPlaybackRequest,
+    ) -> Result<StartPlaybackResponse, String> {
+        // Get the recording
+        let recording = self.get_recording(recording_id).await?;
+
+        // Check if recording has actions
+        if recording.actions.is_empty() {
+            return Err("ERR_RECORDING_HAS_NO_ACTIONS".to_string());
+        }
+
+        let speed = if request.speed <= 0.0 { 1.0 } else { request.speed };
+        let total_actions = recording.actions.len() as i32;
+
+        // Start playback state
+        self.recording_state
+            .start_playback(&request.target_device_udid, recording_id, speed)
+            .await?;
+
+        Ok(StartPlaybackResponse {
+            status: "success".to_string(),
+            recording_id,
+            target_device_udid: request.target_device_udid,
+            total_actions,
+            message: format!(
+                "Playback started: {} actions at {}x speed",
+                total_actions, speed
+            ),
+        })
+    }
+
+    /// Stop playback on a device.
+    pub async fn stop_playback(&self, target_device_udid: &str) -> Result<(), String> {
+        self.recording_state
+            .stop_playback(target_device_udid)
+            .await
+            .ok_or_else(|| "ERR_NO_ACTIVE_PLAYBACK".to_string())?;
+        Ok(())
+    }
+
+    /// Pause playback on a device.
+    pub async fn pause_playback_session(&self, target_device_udid: &str) -> Result<(), String> {
+        self.recording_state.pause_playback(target_device_udid).await
+    }
+
+    /// Resume playback on a device.
+    pub async fn resume_playback_session(&self, target_device_udid: &str) -> Result<(), String> {
+        self.recording_state.resume_playback(target_device_udid).await
+    }
+
+    /// Get playback status for a device.
+    pub async fn get_playback_status(&self, target_device_udid: &str) -> Result<PlaybackStatusResponse, String> {
+        let session = self.recording_state
+            .get_playback(target_device_udid)
+            .await
+            .ok_or_else(|| "ERR_NO_ACTIVE_PLAYBACK".to_string())?;
+
+        // Get recording to determine total actions
+        let recording = self.get_recording(session.recording_id).await?;
+        let total_actions = recording.actions.len() as i32;
+        let progress_percent = if total_actions > 0 {
+            (session.current_action_index as f32 / total_actions as f32) * 100.0
+        } else {
+            0.0
+        };
+
+        let playback_status = match session.status {
+            PlaybackStatus::Playing => "playing",
+            PlaybackStatus::Paused => "paused",
+            PlaybackStatus::Stopped => "stopped",
+            PlaybackStatus::Completed => "completed",
+        };
+
+        Ok(PlaybackStatusResponse {
+            status: "success".to_string(),
+            recording_id: session.recording_id,
+            target_device_udid: session.target_device_udid,
+            playback_status: playback_status.to_string(),
+            current_action_index: session.current_action_index,
+            total_actions,
+            progress_percent,
+        })
+    }
+
+    /// Get the current action to execute during playback.
+    /// Returns the action and increments the playback progress.
+    pub async fn get_next_playback_action(&self, target_device_udid: &str) -> Result<Option<(RecordedAction, i32, i32)>, String> {
+        let session = self.recording_state
+            .get_playback(target_device_udid)
+            .await
+            .ok_or_else(|| "ERR_NO_ACTIVE_PLAYBACK".to_string())?;
+
+        if session.status != PlaybackStatus::Playing {
+            return Err("ERR_PLAYBACK_NOT_PLAYING".to_string());
+        }
+
+        // Get recording
+        let recording = self.get_recording(session.recording_id).await?;
+
+        // Check if we've completed all actions
+        if session.current_action_index > recording.actions.len() as i32 {
+            self.recording_state.complete_playback(target_device_udid).await?;
+            return Ok(None);
+        }
+
+        // Get current action (0-indexed in vec, 1-indexed in session)
+        let action_index = (session.current_action_index - 1) as usize;
+        if action_index >= recording.actions.len() {
+            self.recording_state.complete_playback(target_device_udid).await?;
+            return Ok(None);
+        }
+
+        let action = recording.actions[action_index].clone();
+        let total_actions = recording.actions.len() as i32;
+
+        // Increment progress for next call
+        self.recording_state.increment_playback_progress(target_device_udid).await?;
+
+        Ok(Some((action, session.current_action_index, total_actions)))
+    }
+
+    /// Check if a device has active playback.
+    pub async fn is_playing(&self, target_device_udid: &str) -> bool {
+        self.recording_state.is_playing(target_device_udid).await
     }
 }

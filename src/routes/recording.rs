@@ -1,6 +1,7 @@
 use crate::models::recording::{
     RecordActionRequest, StartRecordingRequest,
     StopRecordingRequest, EditActionRequest,
+    StartPlaybackRequest,
 };
 use crate::state::AppState;
 use actix_web::{web, HttpResponse};
@@ -378,6 +379,198 @@ pub async fn delete_action(
                 actix_web::http::StatusCode::BAD_REQUEST
             };
             HttpResponse::build(status).json(json!({
+                "status": "error",
+                "error": error_code,
+                "message": e
+            }))
+        }
+    }
+}
+
+// ==================== Playback Endpoints ====================
+
+/// POST /api/recordings/{id}/play - Start playback on a target device
+pub async fn start_playback(
+    state: web::Data<AppState>,
+    path: web::Path<i64>,
+    body: web::Json<StartPlaybackRequest>,
+) -> HttpResponse {
+    let recording_id = path.into_inner();
+
+    match state.recording_service.start_playback(recording_id, body.into_inner()).await {
+        Ok(response) => HttpResponse::Ok().json(response),
+        Err(e) => {
+            let (status, error_code) = if e.contains("not found") {
+                (actix_web::http::StatusCode::NOT_FOUND, "ERR_RECORDING_NOT_FOUND")
+            } else if e == "ERR_RECORDING_HAS_NO_ACTIONS" {
+                (actix_web::http::StatusCode::BAD_REQUEST, "ERR_RECORDING_HAS_NO_ACTIONS")
+            } else if e == "ERR_PLAYBACK_ALREADY_ACTIVE" {
+                (actix_web::http::StatusCode::BAD_REQUEST, "ERR_PLAYBACK_ALREADY_ACTIVE")
+            } else {
+                (actix_web::http::StatusCode::INTERNAL_SERVER_ERROR, "ERR_PLAYBACK_START_FAILED")
+            };
+            HttpResponse::build(status).json(json!({
+                "status": "error",
+                "error": error_code,
+                "message": e
+            }))
+        }
+    }
+}
+
+/// GET /api/recordings/{id}/playback/status - Get playback status
+pub async fn get_playback_status(
+    state: web::Data<AppState>,
+    path: web::Path<i64>,
+    query: web::Query<std::collections::HashMap<String, String>>,
+) -> HttpResponse {
+    let _recording_id = path.into_inner();
+
+    // Get target_device_udid from query params
+    let target_device_udid = match query.get("target_device_udid") {
+        Some(udid) => udid.clone(),
+        None => {
+            return HttpResponse::BadRequest().json(json!({
+                "status": "error",
+                "error": "ERR_MISSING_DEVICE_UDID",
+                "message": "target_device_udid query parameter is required"
+            }));
+        }
+    };
+
+    match state.recording_service.get_playback_status(&target_device_udid).await {
+        Ok(status) => HttpResponse::Ok().json(status),
+        Err(e) => {
+            let error_code = if e == "ERR_NO_ACTIVE_PLAYBACK" {
+                "ERR_NO_ACTIVE_PLAYBACK"
+            } else {
+                "ERR_PLAYBACK_STATUS_FAILED"
+            };
+            HttpResponse::BadRequest().json(json!({
+                "status": "error",
+                "error": error_code,
+                "message": e
+            }))
+        }
+    }
+}
+
+/// POST /api/recordings/{id}/playback/stop - Stop playback
+pub async fn stop_playback(
+    state: web::Data<AppState>,
+    path: web::Path<i64>,
+    query: web::Query<std::collections::HashMap<String, String>>,
+) -> HttpResponse {
+    let _recording_id = path.into_inner();
+
+    // Get target_device_udid from query params
+    let target_device_udid = match query.get("target_device_udid") {
+        Some(udid) => udid.clone(),
+        None => {
+            return HttpResponse::BadRequest().json(json!({
+                "status": "error",
+                "error": "ERR_MISSING_DEVICE_UDID",
+                "message": "target_device_udid query parameter is required"
+            }));
+        }
+    };
+
+    match state.recording_service.stop_playback(&target_device_udid).await {
+        Ok(()) => HttpResponse::Ok().json(json!({
+            "status": "success",
+            "message": "Playback stopped"
+        })),
+        Err(e) => {
+            let error_code = if e == "ERR_NO_ACTIVE_PLAYBACK" {
+                "ERR_NO_ACTIVE_PLAYBACK"
+            } else {
+                "ERR_PLAYBACK_STOP_FAILED"
+            };
+            HttpResponse::BadRequest().json(json!({
+                "status": "error",
+                "error": error_code,
+                "message": e
+            }))
+        }
+    }
+}
+
+/// POST /api/recordings/{id}/playback/pause - Pause playback
+pub async fn pause_playback(
+    state: web::Data<AppState>,
+    path: web::Path<i64>,
+    query: web::Query<std::collections::HashMap<String, String>>,
+) -> HttpResponse {
+    let _recording_id = path.into_inner();
+
+    // Get target_device_udid from query params
+    let target_device_udid = match query.get("target_device_udid") {
+        Some(udid) => udid.clone(),
+        None => {
+            return HttpResponse::BadRequest().json(json!({
+                "status": "error",
+                "error": "ERR_MISSING_DEVICE_UDID",
+                "message": "target_device_udid query parameter is required"
+            }));
+        }
+    };
+
+    match state.recording_service.pause_playback_session(&target_device_udid).await {
+        Ok(()) => HttpResponse::Ok().json(json!({
+            "status": "success",
+            "message": "Playback paused"
+        })),
+        Err(e) => {
+            let error_code = if e == "ERR_NO_ACTIVE_PLAYBACK" {
+                "ERR_NO_ACTIVE_PLAYBACK"
+            } else if e == "ERR_PLAYBACK_NOT_PLAYING" {
+                "ERR_PLAYBACK_NOT_PLAYING"
+            } else {
+                "ERR_PLAYBACK_PAUSE_FAILED"
+            };
+            HttpResponse::BadRequest().json(json!({
+                "status": "error",
+                "error": error_code,
+                "message": e
+            }))
+        }
+    }
+}
+
+/// POST /api/recordings/{id}/playback/resume - Resume playback
+pub async fn resume_playback(
+    state: web::Data<AppState>,
+    path: web::Path<i64>,
+    query: web::Query<std::collections::HashMap<String, String>>,
+) -> HttpResponse {
+    let _recording_id = path.into_inner();
+
+    // Get target_device_udid from query params
+    let target_device_udid = match query.get("target_device_udid") {
+        Some(udid) => udid.clone(),
+        None => {
+            return HttpResponse::BadRequest().json(json!({
+                "status": "error",
+                "error": "ERR_MISSING_DEVICE_UDID",
+                "message": "target_device_udid query parameter is required"
+            }));
+        }
+    };
+
+    match state.recording_service.resume_playback_session(&target_device_udid).await {
+        Ok(()) => HttpResponse::Ok().json(json!({
+            "status": "success",
+            "message": "Playback resumed"
+        })),
+        Err(e) => {
+            let error_code = if e == "ERR_NO_ACTIVE_PLAYBACK" {
+                "ERR_NO_ACTIVE_PLAYBACK"
+            } else if e == "ERR_PLAYBACK_NOT_PAUSED" {
+                "ERR_PLAYBACK_NOT_PAUSED"
+            } else {
+                "ERR_PLAYBACK_RESUME_FAILED"
+            };
+            HttpResponse::BadRequest().json(json!({
                 "status": "error",
                 "error": error_code,
                 "message": e

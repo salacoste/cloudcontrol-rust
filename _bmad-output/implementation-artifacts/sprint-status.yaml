@@ -181,7 +181,7 @@ epics:
 
   epic-5:
     title: "External API & CI/CD Integration"
-    status: in-progress
+    status: done
     priority: P2
     phase: Growth
     frs_covered: [FR30, FR31, FR32, FR33, FR34]
@@ -204,16 +204,18 @@ epics:
         completed_date: "2026-03-08"
       - id: 5-4-ci-cd-integration-examples
         title: "CI/CD Integration Examples"
-        status: backlog
+        status: done
         priority: P3
+        completed_date: "2026-03-09"
       - id: 5-5-json-rpc-websocket-interface
         title: "JSON-RPC WebSocket Interface"
-        status: backlog
+        status: done
         priority: P2
+        completed_date: "2026-03-09"
 
   epic-6:
     title: "High-Fidelity Screen Mirroring"
-    status: backlog
+    status: done
     priority: P3
     phase: Post-MVP
     frs_covered: [FR35, FR36, FR37, FR38]
@@ -221,19 +223,23 @@ epics:
     stories:
       - id: 6-1-scrcpy-session-management
         title: "Scrcpy Session Management"
-        status: backlog
+        status: done
+        completed_date: "2026-03-09"
         priority: P3
       - id: 6-2-scrcpy-device-control
         title: "Scrcpy Device Control"
-        status: backlog
+        status: done
+        completed_date: "2026-03-09"
         priority: P3
       - id: 6-3-h264-websocket-relay
         title: "H.264 WebSocket Relay"
-        status: backlog
+        status: done
+        completed_date: "2026-03-09"
         priority: P3
       - id: 6-4-scrcpy-session-recording
         title: "Scrcpy Session Recording"
-        status: backlog
+        status: done
+        completed_date: "2026-03-09"
         priority: P3
 
 # Summary Statistics

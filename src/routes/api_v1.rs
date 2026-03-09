@@ -724,56 +724,10 @@ cloudcontrol_screenshot_latency_seconds{{quantile="0.99"}} {}
 
 /// GET /api/v1/openapi.json - OpenAPI 3.0 specification
 pub async fn openapi_spec() -> HttpResponse {
+    let spec = crate::models::openapi::generate_openapi_spec();
     HttpResponse::Ok()
         .content_type("application/json")
-        .json(json!({
-            "openapi": "3.0.0",
-            "info": {
-                "title": "CloudControl Rust API",
-                "version": "1.0.0",
-                "description": "REST API for Android device control and automation"
-            },
-            "servers": [{"url": "http://localhost:8000", "description": "Development server"}],
-            "paths": {
-                "/api/v1/devices": {
-                    "get": {"summary": "List all connected devices", "operationId": "listDevices"}
-                },
-                "/api/v1/devices/{udid}": {
-                    "get": {"summary": "Get device information", "operationId": "getDevice"}
-                },
-                "/api/v1/devices/{udid}/screenshot": {
-                    "get": {"summary": "Get device screenshot", "operationId": "getScreenshot"}
-                },
-                "/api/v1/devices/{udid}/tap": {
-                    "post": {"summary": "Execute tap command", "operationId": "tap"}
-                },
-                "/api/v1/devices/{udid}/swipe": {
-                    "post": {"summary": "Execute swipe gesture", "operationId": "swipe"}
-                },
-                "/api/v1/devices/{udid}/input": {
-                    "post": {"summary": "Input text to device", "operationId": "input"}
-                },
-                "/api/v1/devices/{udid}/keyevent": {
-                    "post": {"summary": "Send key event", "operationId": "keyevent"}
-                },
-                "/api/v1/batch/tap": {
-                    "post": {"summary": "Batch tap operation", "operationId": "batchTap"}
-                },
-                "/api/v1/batch/swipe": {
-                    "post": {"summary": "Batch swipe operation", "operationId": "batchSwipe"}
-                },
-                "/api/v1/batch/input": {
-                    "post": {"summary": "Batch input operation", "operationId": "batchInput"}
-                },
-                "/api/v1/ws/screenshot/{udid}": {
-                    "get": {
-                        "summary": "WebSocket screenshot streaming",
-                        "description": "Binary JPEG screenshot stream with JSON-RPC 2.0 control",
-                        "operationId": "wsScreenshot"
-                    }
-                }
-            }
-        }))
+        .json(spec)
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -795,7 +749,7 @@ struct JsonRpcRequest {
 struct JsonRpcResponse {
     jsonrpc: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    result: Option<String>,
+    result: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<JsonRpcError>,
     id: u64,
@@ -1006,7 +960,7 @@ pub async fn ws_screenshot(
 
                                     JsonRpcResponse {
                                         jsonrpc: "2.0".to_string(),
-                                        result: Some("ok".to_string()),
+                                        result: Some(json!("ok")),
                                         error: None,
                                         id: req.id,
                                     }
@@ -1020,7 +974,7 @@ pub async fn ws_screenshot(
 
                                     JsonRpcResponse {
                                         jsonrpc: "2.0".to_string(),
-                                        result: Some("ok".to_string()),
+                                        result: Some(json!("ok")),
                                         error: None,
                                         id: req.id,
                                     }
@@ -1049,7 +1003,7 @@ pub async fn ws_screenshot(
 
                                         JsonRpcResponse {
                                             jsonrpc: "2.0".to_string(),
-                                            result: Some("ok".to_string()),
+                                            result: Some(json!("ok")),
                                             error: None,
                                             id: req.id,
                                         }
@@ -1079,7 +1033,7 @@ pub async fn ws_screenshot(
 
                                         JsonRpcResponse {
                                             jsonrpc: "2.0".to_string(),
-                                            result: Some("ok".to_string()),
+                                            result: Some(json!("ok")),
                                             error: None,
                                             id: req.id,
                                         }
@@ -1109,7 +1063,7 @@ pub async fn ws_screenshot(
 
                                         JsonRpcResponse {
                                             jsonrpc: "2.0".to_string(),
-                                            result: Some("ok".to_string()),
+                                            result: Some(json!("ok")),
                                             error: None,
                                             id: req.id,
                                         }
@@ -1133,7 +1087,7 @@ pub async fn ws_screenshot(
 
                                     JsonRpcResponse {
                                         jsonrpc: "2.0".to_string(),
-                                        result: Some("ok".to_string()),
+                                        result: Some(json!("ok")),
                                         error: None,
                                         id: req.id,
                                     }
@@ -1229,4 +1183,559 @@ async fn get_device_client_for_ws(
     let (final_ip, final_port) = resolve_device_connection(&device, ip, port).await;
     let client = state.connection_pool.get_or_create(udid, &final_ip, final_port).await;
     Ok((device, client))
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// JSON-RPC NIO WebSocket Handler (Story 5-5)
+// ═════════════════════════════════════════════════════════════════════════════
+
+/// JSON-RPC NIO WebSocket endpoint — device-agnostic automation interface.
+/// Unlike `/ws/screenshot/{udid}`, this endpoint accepts any device UDID via params.
+pub async fn ws_nio(
+    state: web::Data<AppState>,
+    req: HttpRequest,
+    stream: web::Payload,
+) -> HttpResponse {
+    let (resp, mut session, mut msg_stream) = match actix_ws::handle(&req, stream) {
+        Ok(v) => v,
+        Err(e) => {
+            return HttpResponse::InternalServerError().json(json!({
+                "status": "error",
+                "error": "ERR_WEBSOCKET_UPGRADE_FAILED",
+                "message": format!("WebSocket upgrade failed: {}", e)
+            }));
+        }
+    };
+
+    state.metrics.websocket_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    tracing::info!("[WS-NIO] Client connected");
+
+    let state_inner = state.into_inner();
+    actix_web::rt::spawn(async move {
+        while let Some(Ok(msg)) = msg_stream.next().await {
+            match msg {
+                actix_ws::Message::Text(text) => {
+                    let response = handle_nio_rpc(&state_inner, &text).await;
+                    if session.text(response).await.is_err() {
+                        break;
+                    }
+                }
+                actix_ws::Message::Ping(bytes) => {
+                    if session.pong(&bytes).await.is_err() {
+                        break;
+                    }
+                }
+                actix_ws::Message::Close(_) => break,
+                _ => {}
+            }
+        }
+        state_inner.metrics.websocket_count.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+        tracing::info!("[WS-NIO] Client disconnected");
+    });
+
+    resp
+}
+
+/// Parse and dispatch a JSON-RPC 2.0 request.
+async fn handle_nio_rpc(state: &AppState, text: &str) -> String {
+    let request: JsonRpcRequest = match serde_json::from_str(text) {
+        Ok(r) => r,
+        Err(e) => {
+            return serde_json::to_string(&JsonRpcResponse {
+                jsonrpc: "2.0".to_string(),
+                result: None,
+                error: Some(JsonRpcError {
+                    code: -32700,
+                    message: format!("Parse error: {}", e),
+                }),
+                id: 0,
+            })
+            .unwrap_or_default();
+        }
+    };
+
+    if request.jsonrpc != "2.0" {
+        return serde_json::to_string(&JsonRpcResponse {
+            jsonrpc: "2.0".to_string(),
+            result: None,
+            error: Some(JsonRpcError {
+                code: -32600,
+                message: "Invalid Request: jsonrpc must be \"2.0\"".to_string(),
+            }),
+            id: request.id,
+        })
+        .unwrap_or_default();
+    }
+
+    let result = match request.method.as_str() {
+        // Single-device operations
+        "tap" => nio_tap(state, &request.params, request.id).await,
+        "swipe" => nio_swipe(state, &request.params, request.id).await,
+        "input" => nio_input(state, &request.params, request.id).await,
+        "keyevent" => nio_keyevent(state, &request.params, request.id).await,
+        // Batch operations
+        "batchTap" => nio_batch_tap(state, &request.params, request.id).await,
+        "batchSwipe" => nio_batch_swipe(state, &request.params, request.id).await,
+        "batchInput" => nio_batch_input(state, &request.params, request.id).await,
+        // Utility methods
+        "listDevices" => nio_list_devices(state, request.id).await,
+        "getDevice" => nio_get_device(state, &request.params, request.id).await,
+        "screenshot" => nio_screenshot(state, &request.params, request.id).await,
+        "getStatus" => nio_get_status(state, request.id).await,
+        _ => {
+            return serde_json::to_string(&JsonRpcResponse {
+                jsonrpc: "2.0".to_string(),
+                result: None,
+                error: Some(JsonRpcError {
+                    code: -32601,
+                    message: format!("Method not found: {}", request.method),
+                }),
+                id: request.id,
+            })
+            .unwrap_or_default();
+        }
+    };
+
+    serde_json::to_string(&result).unwrap_or_default()
+}
+
+// ─── NIO Helpers ─────────────────────────────────────────────────────────────
+
+/// Resolve a device client from UDID for NIO operations.
+async fn nio_get_client(
+    state: &AppState,
+    udid: &str,
+) -> Result<(serde_json::Value, Arc<AtxClient>), JsonRpcError> {
+    // Try device info cache first (matches get_device_client pattern)
+    if let Some(cached) = state.device_info_cache.get(udid).await {
+        let ip = cached.get("ip").and_then(|v| v.as_str()).unwrap_or("");
+        let port = cached.get("port").and_then(|v| v.as_i64()).unwrap_or(9008);
+        let (final_ip, final_port) = resolve_device_connection(&cached, ip, port).await;
+        let client = state.connection_pool.get_or_create(udid, &final_ip, final_port).await;
+        return Ok((cached, client));
+    }
+
+    let phone_service = crate::services::phone_service::PhoneService::new(state.db.clone());
+    let device = phone_service
+        .query_info_by_udid(udid)
+        .await
+        .map_err(|e| JsonRpcError {
+            code: -1,
+            message: format!("Device not found: {}", e),
+        })?
+        .ok_or_else(|| JsonRpcError {
+            code: -1,
+            message: format!("Device '{}' not found", udid),
+        })?;
+
+    state.device_info_cache.insert(udid.to_string(), device.clone()).await;
+
+    let ip = device.get("ip").and_then(|v| v.as_str()).unwrap_or("");
+    let port = device.get("port").and_then(|v| v.as_i64()).unwrap_or(9008);
+    let (final_ip, final_port) = resolve_device_connection(&device, ip, port).await;
+    let client = state.connection_pool.get_or_create(udid, &final_ip, final_port).await;
+    Ok((device, client))
+}
+
+fn missing_param(name: &str) -> JsonRpcError {
+    JsonRpcError {
+        code: -32602,
+        message: format!("Invalid params: missing '{}'", name),
+    }
+}
+
+fn invalid_param(name: &str, detail: &str) -> JsonRpcError {
+    JsonRpcError {
+        code: -32602,
+        message: format!("Invalid params: '{}' {}", name, detail),
+    }
+}
+
+fn operation_failed(msg: String) -> JsonRpcError {
+    JsonRpcError {
+        code: -32603,
+        message: msg,
+    }
+}
+
+fn rpc_ok(id: u64) -> JsonRpcResponse {
+    JsonRpcResponse {
+        jsonrpc: "2.0".to_string(),
+        result: Some(json!("ok")),
+        error: None,
+        id,
+    }
+}
+
+fn rpc_result(id: u64, value: serde_json::Value) -> JsonRpcResponse {
+    JsonRpcResponse {
+        jsonrpc: "2.0".to_string(),
+        result: Some(value),
+        error: None,
+        id,
+    }
+}
+
+fn rpc_error(id: u64, err: JsonRpcError) -> JsonRpcResponse {
+    JsonRpcResponse {
+        jsonrpc: "2.0".to_string(),
+        result: None,
+        error: Some(err),
+        id,
+    }
+}
+
+// ─── Single-Device JSON-RPC Methods ──────────────────────────────────────────
+
+async fn nio_tap(state: &AppState, params: &serde_json::Value, id: u64) -> JsonRpcResponse {
+    let udid = match params.get("udid").and_then(|v| v.as_str()) {
+        Some(u) => u,
+        None => return rpc_error(id, missing_param("udid")),
+    };
+    let x = match params.get("x").and_then(|v| v.as_f64()) {
+        Some(v) => v as i32,
+        None => return rpc_error(id, missing_param("x")),
+    };
+    let y = match params.get("y").and_then(|v| v.as_f64()) {
+        Some(v) => v as i32,
+        None => return rpc_error(id, missing_param("y")),
+    };
+
+    let (_device, client) = match nio_get_client(state, udid).await {
+        Ok(c) => c,
+        Err(e) => return rpc_error(id, e),
+    };
+
+    // click() takes i32 directly; batch uses u32→i32 cast via execute_single_tap
+    match client.click(x, y).await {
+        Ok(_) => rpc_ok(id),
+        Err(e) => rpc_error(id, operation_failed(format!("Tap failed: {}", e))),
+    }
+}
+
+async fn nio_swipe(state: &AppState, params: &serde_json::Value, id: u64) -> JsonRpcResponse {
+    let udid = match params.get("udid").and_then(|v| v.as_str()) {
+        Some(u) => u,
+        None => return rpc_error(id, missing_param("udid")),
+    };
+    let x1 = match params.get("x1").and_then(|v| v.as_f64()) {
+        Some(v) => v as i32,
+        None => return rpc_error(id, missing_param("x1")),
+    };
+    let y1 = match params.get("y1").and_then(|v| v.as_f64()) {
+        Some(v) => v as i32,
+        None => return rpc_error(id, missing_param("y1")),
+    };
+    let x2 = match params.get("x2").and_then(|v| v.as_f64()) {
+        Some(v) => v as i32,
+        None => return rpc_error(id, missing_param("x2")),
+    };
+    let y2 = match params.get("y2").and_then(|v| v.as_f64()) {
+        Some(v) => v as i32,
+        None => return rpc_error(id, missing_param("y2")),
+    };
+    let duration = params
+        .get("duration")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(200.0);
+
+    let (_device, client) = match nio_get_client(state, udid).await {
+        Ok(c) => c,
+        Err(e) => return rpc_error(id, e),
+    };
+
+    match client.swipe(x1, y1, x2, y2, duration).await {
+        Ok(_) => rpc_ok(id),
+        Err(e) => rpc_error(id, operation_failed(format!("Swipe failed: {}", e))),
+    }
+}
+
+async fn nio_input(state: &AppState, params: &serde_json::Value, id: u64) -> JsonRpcResponse {
+    let udid = match params.get("udid").and_then(|v| v.as_str()) {
+        Some(u) => u,
+        None => return rpc_error(id, missing_param("udid")),
+    };
+    let text = match params.get("text").and_then(|v| v.as_str()) {
+        Some(t) => t,
+        None => return rpc_error(id, missing_param("text")),
+    };
+
+    let (_device, client) = match nio_get_client(state, udid).await {
+        Ok(c) => c,
+        Err(e) => return rpc_error(id, e),
+    };
+
+    match client.input_text(text).await {
+        Ok(_) => rpc_ok(id),
+        Err(e) => rpc_error(id, operation_failed(format!("Input failed: {}", e))),
+    }
+}
+
+async fn nio_keyevent(state: &AppState, params: &serde_json::Value, id: u64) -> JsonRpcResponse {
+    let udid = match params.get("udid").and_then(|v| v.as_str()) {
+        Some(u) => u,
+        None => return rpc_error(id, missing_param("udid")),
+    };
+    let key = match params.get("key").and_then(|v| v.as_str()) {
+        Some(k) => k,
+        None => return rpc_error(id, missing_param("key")),
+    };
+
+    let (_device, client) = match nio_get_client(state, udid).await {
+        Ok(c) => c,
+        Err(e) => return rpc_error(id, e),
+    };
+
+    match client.press_key(key).await {
+        Ok(_) => rpc_ok(id),
+        Err(e) => rpc_error(id, operation_failed(format!("Keyevent failed: {}", e))),
+    }
+}
+
+// ─── Batch JSON-RPC Methods ─────────────────────────────────────────────────
+
+fn extract_udids(params: &serde_json::Value) -> Result<Vec<String>, JsonRpcError> {
+    let udids = params
+        .get("udids")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| missing_param("udids"))?;
+
+    if udids.is_empty() {
+        return Err(invalid_param("udids", "must not be empty"));
+    }
+    if udids.len() > MAX_BATCH_SIZE {
+        return Err(invalid_param(
+            "udids",
+            &format!("exceeds max batch size of {}", MAX_BATCH_SIZE),
+        ));
+    }
+
+    udids
+        .iter()
+        .map(|v| {
+            v.as_str()
+                .map(|s| s.to_string())
+                .ok_or_else(|| invalid_param("udids", "all elements must be strings"))
+        })
+        .collect()
+}
+
+fn build_batch_result(results: Vec<(String, Result<(), (String, String)>)>) -> serde_json::Value {
+    let total = results.len();
+    let mut succeeded = 0usize;
+    let mut failed = 0usize;
+    let mut items = Vec::new();
+
+    for (udid, result) in results {
+        match result {
+            Ok(_) => {
+                succeeded += 1;
+                items.push(json!({"udid": udid, "status": "success"}));
+            }
+            Err((_code, msg)) => {
+                failed += 1;
+                items.push(json!({"udid": udid, "status": "error", "error": msg}));
+            }
+        }
+    }
+
+    json!({
+        "total": total,
+        "succeeded": succeeded,
+        "failed": failed,
+        "results": items
+    })
+}
+
+async fn nio_batch_tap(state: &AppState, params: &serde_json::Value, id: u64) -> JsonRpcResponse {
+    let udids = match extract_udids(params) {
+        Ok(u) => u,
+        Err(e) => return rpc_error(id, e),
+    };
+    // Parse as i32 (consistent with nio_tap), cast to u32 for execute_single_tap
+    let x = match params.get("x").and_then(|v| v.as_f64()) {
+        Some(v) => v as i32 as u32,
+        None => return rpc_error(id, missing_param("x")),
+    };
+    let y = match params.get("y").and_then(|v| v.as_f64()) {
+        Some(v) => v as i32 as u32,
+        None => return rpc_error(id, missing_param("y")),
+    };
+
+    let futures: Vec<_> = udids.iter()
+        .map(|udid| execute_single_tap(state, udid, x, y))
+        .collect();
+    let results = futures::future::join_all(futures).await;
+
+    let batch = udids.into_iter()
+        .zip(results.into_iter())
+        .collect::<Vec<_>>();
+
+    rpc_result(id, build_batch_result(batch))
+}
+
+async fn nio_batch_swipe(
+    state: &AppState,
+    params: &serde_json::Value,
+    id: u64,
+) -> JsonRpcResponse {
+    let udids = match extract_udids(params) {
+        Ok(u) => u,
+        Err(e) => return rpc_error(id, e),
+    };
+    // Parse as i32 (consistent with nio_swipe), cast to u32 for execute_single_swipe
+    let x1 = match params.get("x1").and_then(|v| v.as_f64()) {
+        Some(v) => v as i32 as u32,
+        None => return rpc_error(id, missing_param("x1")),
+    };
+    let y1 = match params.get("y1").and_then(|v| v.as_f64()) {
+        Some(v) => v as i32 as u32,
+        None => return rpc_error(id, missing_param("y1")),
+    };
+    let x2 = match params.get("x2").and_then(|v| v.as_f64()) {
+        Some(v) => v as i32 as u32,
+        None => return rpc_error(id, missing_param("x2")),
+    };
+    let y2 = match params.get("y2").and_then(|v| v.as_f64()) {
+        Some(v) => v as i32 as u32,
+        None => return rpc_error(id, missing_param("y2")),
+    };
+    let duration = params
+        .get("duration")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(200.0);
+
+    let futures: Vec<_> = udids.iter()
+        .map(|udid| execute_single_swipe(state, udid, x1, y1, x2, y2, duration))
+        .collect();
+    let results = futures::future::join_all(futures).await;
+
+    let batch = udids.into_iter()
+        .zip(results.into_iter())
+        .collect::<Vec<_>>();
+
+    rpc_result(id, build_batch_result(batch))
+}
+
+async fn nio_batch_input(
+    state: &AppState,
+    params: &serde_json::Value,
+    id: u64,
+) -> JsonRpcResponse {
+    let udids = match extract_udids(params) {
+        Ok(u) => u,
+        Err(e) => return rpc_error(id, e),
+    };
+    let text = match params.get("text").and_then(|v| v.as_str()) {
+        Some(t) => t.to_string(),
+        None => return rpc_error(id, missing_param("text")),
+    };
+
+    let futures: Vec<_> = udids.iter()
+        .map(|udid| execute_single_input(state, udid, &text))
+        .collect();
+    let results = futures::future::join_all(futures).await;
+
+    let batch = udids.into_iter()
+        .zip(results.into_iter())
+        .collect::<Vec<_>>();
+
+    rpc_result(id, build_batch_result(batch))
+}
+
+// ─── Utility JSON-RPC Methods ───────────────────────────────────────────────
+
+async fn nio_list_devices(state: &AppState, id: u64) -> JsonRpcResponse {
+    let phone_service = crate::services::phone_service::PhoneService::new(state.db.clone());
+    match phone_service.query_device_list_by_present().await {
+        Ok(devices) => rpc_result(id, json!(devices)),
+        Err(e) => rpc_error(id, operation_failed(format!("Failed to list devices: {}", e))),
+    }
+}
+
+async fn nio_get_device(
+    state: &AppState,
+    params: &serde_json::Value,
+    id: u64,
+) -> JsonRpcResponse {
+    let udid = match params.get("udid").and_then(|v| v.as_str()) {
+        Some(u) => u,
+        None => return rpc_error(id, missing_param("udid")),
+    };
+
+    let phone_service = crate::services::phone_service::PhoneService::new(state.db.clone());
+    match phone_service.query_info_by_udid(udid).await {
+        Ok(Some(device)) => rpc_result(id, device),
+        Ok(None) => rpc_error(
+            id,
+            JsonRpcError {
+                code: -1,
+                message: format!("Device '{}' not found", udid),
+            },
+        ),
+        Err(e) => rpc_error(id, operation_failed(format!("Failed to get device: {}", e))),
+    }
+}
+
+async fn nio_screenshot(
+    state: &AppState,
+    params: &serde_json::Value,
+    id: u64,
+) -> JsonRpcResponse {
+    let udid = match params.get("udid").and_then(|v| v.as_str()) {
+        Some(u) => u,
+        None => return rpc_error(id, missing_param("udid")),
+    };
+    let quality = params
+        .get("quality")
+        .and_then(|v| v.as_u64())
+        .map(|q| q as u8)
+        .unwrap_or(80);
+    let scale = params
+        .get("scale")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.5);
+
+    let (_device, client) = match nio_get_client(state, udid).await {
+        Ok(c) => c,
+        Err(e) => return rpc_error(id, e),
+    };
+
+    match client.screenshot_scaled(scale, quality).await {
+        Ok(data) => {
+            use base64::Engine;
+            let b64 = base64::engine::general_purpose::STANDARD.encode(&data);
+            rpc_result(
+                id,
+                json!({
+                    "format": "jpeg",
+                    "quality": quality,
+                    "scale": scale,
+                    "data": b64
+                }),
+            )
+        }
+        Err(e) => rpc_error(
+            id,
+            operation_failed(format!("Screenshot failed: {}", e)),
+        ),
+    }
+}
+
+async fn nio_get_status(state: &AppState, id: u64) -> JsonRpcResponse {
+    let phone_service = crate::services::phone_service::PhoneService::new(state.db.clone());
+    // query_device_list_by_present returns only devices with present=true (connected)
+    match phone_service.query_device_list_by_present().await {
+        Ok(devices) => {
+            rpc_result(
+                id,
+                json!({
+                    "total_devices": devices.len(),
+                    "connected": devices.len(),
+                    "websocket_connections": state.metrics.websocket_count.load(std::sync::atomic::Ordering::Relaxed)
+                }),
+            )
+        }
+        Err(e) => rpc_error(id, operation_failed(format!("Failed to get status: {}", e))),
+    }
 }
