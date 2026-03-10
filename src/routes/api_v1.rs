@@ -336,12 +336,25 @@ pub async fn keyevent(
         return error_response("ERR_INVALID_REQUEST", "Key cannot be empty");
     }
 
+    // Validate key name to prevent shell injection (alphanumeric, underscore, hyphen only)
+    if !body.key.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-') {
+        return error_response("ERR_INVALID_REQUEST", "Key contains invalid characters");
+    }
+
     match get_device_client(&state, &udid).await {
-        Ok((_device, client)) => {
-            // Use press_key method from AtxClient
+        Ok((device, client)) => {
+            // Try ATX press_key first, fall back to ADB input keyevent
             match client.press_key(&body.key).await {
                 Ok(_) => success_response(json!({"executed": true, "key": body.key})),
-                Err(e) => error_response("ERR_OPERATION_FAILED", &e),
+                Err(e) => {
+                    tracing::warn!("[KEYEVENT] ATX press_key failed for {}: {}, trying ADB fallback", udid, e);
+                    let serial = device.get("serial").and_then(|v| v.as_str()).unwrap_or(&udid);
+                    let adb_key = format!("KEYCODE_{}", body.key.to_uppercase());
+                    match Adb::shell(serial, &format!("input keyevent {}", adb_key)).await {
+                        Ok(_) => success_response(json!({"executed": true, "key": body.key, "fallback": "adb"})),
+                        Err(adb_err) => error_response("ERR_OPERATION_FAILED", &format!("ATX: {} | ADB: {}", e, adb_err)),
+                    }
+                }
             }
         }
         Err(response) => response,

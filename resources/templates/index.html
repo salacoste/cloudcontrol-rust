@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -31,14 +31,14 @@
       color: var(--term-primary);
     }
 
-    /* 设备网格 */
+    /* Device grid */
     .term-devices-grid {
       display: grid;
       grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
       gap: 16px;
     }
 
-    /* 快速命令区 */
+    /* Quick commands area */
     .term-quick-actions {
       display: flex;
       flex-wrap: wrap;
@@ -46,7 +46,7 @@
       margin-top: 16px;
     }
 
-    /* 统计卡片 */
+    /* Stats cards */
     .term-stats-grid {
       display: grid;
       grid-template-columns: repeat(4, 1fr);
@@ -397,23 +397,67 @@
           <span class="term-rec-dot"></span>
           RECORDING [${ recordingActionCount } actions]
         </span>
+        <!-- Playback Controls -->
+        <button class="term-btn" v-if="!isRecording && !isPlayingBack && selectedDevices.length === 1" @click="openPlaybackModal">
+          ▶ PLAY RECORDING
+        </button>
+        <button class="term-btn term-btn-danger" v-if="isPlayingBack" @click="stopPlayback">
+          ⏹ STOP PLAYBACK
+        </button>
+        <span v-if="isPlayingBack" class="term-recording-indicator" style="color: #4fc3f7;">
+          ▶ PLAYING [${ playbackCurrentAction }/${ playbackTotalActions }] ${ playbackProgressPercent.toFixed(0) }%
+        </span>
+      </div>
+
+      <!-- Playback Modal -->
+      <div v-if="showPlaybackModal" class="term-modal-overlay" @click.self="showPlaybackModal = false">
+        <div class="term-modal">
+          <div class="term-modal-header">
+            <span>PLAY RECORDING</span>
+            <button class="term-modal-close" @click="showPlaybackModal = false">&times;</button>
+          </div>
+          <div class="term-modal-body">
+            <div v-if="availableRecordings.length === 0" style="color: #888; padding: 16px;">
+              No recordings available. Record some actions first.
+            </div>
+            <div v-for="rec in availableRecordings" :key="rec.id" class="term-card" style="margin-bottom: 8px; cursor: pointer;" @click="selectRecordingForPlayback(rec)">
+              <div style="display: flex; justify-content: space-between; align-items: center;">
+                <div>
+                  <strong>${ rec.name }</strong>
+                  <span style="color: #888; margin-left: 8px;">${ rec.action_count } actions</span>
+                </div>
+                <span style="color: #666; font-size: 12px;">${ new Date(rec.createdAt * 1000).toLocaleString() }</span>
+              </div>
+            </div>
+            <div v-if="availableRecordings.length > 0" style="margin-top: 12px; display: flex; align-items: center; gap: 8px;">
+              <label style="color: #ccc;">Speed:</label>
+              <select v-model.number="playbackSpeed" style="background: #1a1a2e; color: #ccc; border: 1px solid #333; padding: 4px 8px;">
+                <option :value="0.25">0.25x</option>
+                <option :value="0.5">0.5x</option>
+                <option :value="1.0">1.0x (Normal)</option>
+                <option :value="2.0">2.0x</option>
+                <option :value="4.0">4.0x</option>
+              </select>
+            </div>
+          </div>
+        </div>
       </div>
 
       <!-- WiFi Connect Modal -->
       <div v-if="showWifiModal" class="term-modal-overlay" @click.self="showWifiModal = false">
         <div class="term-modal">
           <div class="term-modal-header">
-            <span class="term-modal-title">// WiFi 设备连接</span>
+            <span class="term-modal-title">// WiFi Device Connection</span>
             <button class="term-modal-close" @click="showWifiModal = false">&times;</button>
           </div>
           <div class="term-modal-body">
             <div class="term-form-group">
-              <label class="term-label">设备 IP:端口</label>
+              <label class="term-label">Device IP:Port</label>
               <input type="text" class="term-input" v-model="wifiAddress"
                      placeholder="192.168.1.100:5555"
                      @keyup.enter="connectWifiDevice">
               <div class="term-help-text">
-                格式：IP:端口（例如 192.168.31.186:5555）
+                Format: IP:Port (e.g. 192.168.31.186:5555)
               </div>
             </div>
             <div class="term-form-group" v-if="wifiStatus">
@@ -422,21 +466,21 @@
               </div>
             </div>
             <div class="term-help-block">
-              <div class="term-comment">// 如何开启 WiFi 调试：</div>
-              <div>1. 先用 USB 线连接手机</div>
-              <div>2. 执行命令：<code>adb tcpip 5555</code></div>
-              <div>3. 在手机设置 > WiFi 中查看 IP 地址</div>
-              <div>4. 拔掉 USB，通过 WiFi 连接</div>
+              <div class="term-comment">// How to enable WiFi debugging:</div>
+              <div>1. First connect your phone via USB cable</div>
+              <div>2. Run command: <code>adb tcpip 5555</code></div>
+              <div>3. Check IP address in phone Settings > WiFi</div>
+              <div>4. Unplug USB, connect via WiFi</div>
               <div style="margin-top: 8px;">
-                <span class="term-comment">// Android 11+ 无线调试：</span>
+                <span class="term-comment">// Android 11+ Wireless Debugging:</span>
               </div>
-              <div>设置 > 开发者选项 > 无线调试</div>
+              <div>Settings > Developer Options > Wireless Debugging</div>
             </div>
           </div>
           <div class="term-modal-footer">
-            <button class="term-btn" @click="showWifiModal = false">取消</button>
+            <button class="term-btn" @click="showWifiModal = false">Cancel</button>
             <button class="term-btn term-btn-primary" @click="connectWifiDevice" :disabled="wifiConnecting">
-              ${ wifiConnecting ? '连接中...' : '连接' }
+              ${ wifiConnecting ? 'Connecting...' : 'Connect' }
             </button>
           </div>
         </div>
@@ -579,7 +623,19 @@
         isRecording: false,
         recordingId: null,
         recordingDeviceUdid: null,
-        recordingActionCount: 0
+        recordingActionCount: 0,
+        // Playback state
+        isPlayingBack: false,
+        playbackRecordingId: null,
+        playbackDeviceUdid: null,
+        playbackStatus: null,
+        playbackCurrentAction: 0,
+        playbackTotalActions: 0,
+        playbackProgressPercent: 0,
+        playbackSpeed: 1.0,
+        playbackPollTimer: null,
+        showPlaybackModal: false,
+        availableRecordings: []
       },
       computed: {
         onlineDevices: function() {
@@ -643,7 +699,7 @@
           }, 1000);
         },
         getScreenshotUrl: function(device) {
-          // 使用后端代理 API (设备内部 IP 无法从浏览器直接访问)
+          // Use backend proxy API (device internal IP is not directly accessible from browser)
           return '/inspector/' + device.udid + '/screenshot/img?t=' + Date.now();
         },
         onImgError: function(e) {
@@ -708,13 +764,13 @@
           this.loadDevices();
         },
         openGroupControl: function() {
-          // 构建群控表单并提交到 /async
+          // Build group control form and submit to /async
           if (this.selectedDevices.length === 0) {
             this.addLog('error', 'No devices selected');
             return;
           }
 
-          // 创建表单并POST提交
+          // Create form and submit via POST
           var form = document.createElement('form');
           form.method = 'POST';
           form.action = '/async';
@@ -783,6 +839,109 @@
             self.addLog('error', 'Recording stop error: ' + err.message);
           });
         },
+        // Playback methods
+        openPlaybackModal: function() {
+          var self = this;
+          fetch('/api/recordings')
+          .then(function(r) { return r.json(); })
+          .then(function(data) {
+            if (data.status === 'success') {
+              self.availableRecordings = data.recordings.filter(function(r) { return r.action_count > 0; });
+              self.showPlaybackModal = true;
+            } else {
+              self.addLog('error', 'Failed to load recordings: ' + data.message);
+            }
+          })
+          .catch(function(err) {
+            self.addLog('error', 'Load recordings error: ' + err.message);
+          });
+        },
+        selectRecordingForPlayback: function(rec) {
+          var self = this;
+          var udid = this.selectedDevices[0];
+          this.showPlaybackModal = false;
+          fetch('/api/recordings/' + rec.id + '/play', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ target_device_udid: udid, speed: this.playbackSpeed })
+          })
+          .then(function(r) { return r.json(); })
+          .then(function(data) {
+            if (data.status === 'success') {
+              self.isPlayingBack = true;
+              self.playbackRecordingId = rec.id;
+              self.playbackDeviceUdid = udid;
+              self.playbackTotalActions = data.total_actions;
+              self.playbackCurrentAction = 0;
+              self.playbackProgressPercent = 0;
+              self.addLog('info', 'Playback started: ' + rec.name + ' (' + data.total_actions + ' actions at ' + self.playbackSpeed + 'x)');
+              self.startPlaybackPolling();
+            } else {
+              self.addLog('error', 'Failed to start playback: ' + (data.message || data.error));
+            }
+          })
+          .catch(function(err) {
+            self.addLog('error', 'Playback start error: ' + err.message);
+          });
+        },
+        startPlaybackPolling: function() {
+          var self = this;
+          if (this.playbackPollTimer) clearInterval(this.playbackPollTimer);
+          this.playbackPollTimer = setInterval(function() {
+            if (!self.isPlayingBack) {
+              clearInterval(self.playbackPollTimer);
+              self.playbackPollTimer = null;
+              return;
+            }
+            fetch('/api/recordings/' + self.playbackRecordingId + '/playback/status?target_device_udid=' + encodeURIComponent(self.playbackDeviceUdid))
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+              if (data.status === 'success') {
+                self.playbackCurrentAction = data.current_action_index;
+                self.playbackTotalActions = data.total_actions;
+                self.playbackProgressPercent = data.progress_percent;
+                self.playbackStatus = data.playback_status;
+                if (data.playback_status === 'completed' || data.playback_status === 'stopped') {
+                  self.addLog('info', 'Playback ' + data.playback_status);
+                  self.resetPlaybackState();
+                }
+              }
+            })
+            .catch(function() {
+              // Session may have been cleaned up
+              self.resetPlaybackState();
+            });
+          }, 500);
+        },
+        stopPlayback: function() {
+          var self = this;
+          if (!this.playbackRecordingId) return;
+          fetch('/api/recordings/' + this.playbackRecordingId + '/playback/stop?target_device_udid=' + encodeURIComponent(this.playbackDeviceUdid), {
+            method: 'POST'
+          })
+          .then(function(r) { return r.json(); })
+          .then(function(data) {
+            self.addLog('info', 'Playback stopped');
+            self.resetPlaybackState();
+          })
+          .catch(function(err) {
+            self.addLog('error', 'Playback stop error: ' + err.message);
+            self.resetPlaybackState();
+          });
+        },
+        resetPlaybackState: function() {
+          this.isPlayingBack = false;
+          this.playbackRecordingId = null;
+          this.playbackDeviceUdid = null;
+          this.playbackStatus = null;
+          this.playbackCurrentAction = 0;
+          this.playbackTotalActions = 0;
+          this.playbackProgressPercent = 0;
+          if (this.playbackPollTimer) {
+            clearInterval(this.playbackPollTimer);
+            this.playbackPollTimer = null;
+          }
+        },
         rebootDevice: function(device) {
           if (confirm('Reboot ' + device.model + '?')) {
             this.addLog('warn', 'Rebooting device: ' + device.model);
@@ -846,22 +1005,22 @@
           var addr = this.wifiAddress.trim();
 
           if (!addr) {
-            this.wifiStatus = '请输入 IP:端口';
+            this.wifiStatus = 'Please enter IP:Port';
             this.wifiStatusType = 'error';
             return;
           }
 
           // Validate format
           if (!/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}:\d+$/.test(addr)) {
-            this.wifiStatus = '格式错误，请使用 IP:端口（例如 192.168.1.100:5555）';
+            this.wifiStatus = 'Invalid format, please use IP:Port (e.g. 192.168.1.100:5555)';
             this.wifiStatusType = 'error';
             return;
           }
 
           this.wifiConnecting = true;
-          this.wifiStatus = '正在连接 ' + addr + '...';
+          this.wifiStatus = 'Connecting to ' + addr + '...';
           this.wifiStatusType = 'info';
-          this.addLog('info', 'WiFi 连接: ' + addr);
+          this.addLog('info', 'WiFi connecting: ' + addr);
 
           $.ajax({
             url: '/api/wifi-connect',
@@ -871,9 +1030,9 @@
             success: function(data) {
               self.wifiConnecting = false;
               if (data.status === 'ok') {
-                self.wifiStatus = '连接成功！设备: ' + (data.model || addr);
+                self.wifiStatus = 'Connected successfully! Device: ' + (data.model || addr);
                 self.wifiStatusType = 'success';
-                self.addLog('success', 'WiFi 设备已连接: ' + (data.model || addr));
+                self.addLog('success', 'WiFi device connected: ' + (data.model || addr));
                 // Refresh device list
                 setTimeout(function() {
                   self.loadDevices();
@@ -882,17 +1041,17 @@
                   self.wifiStatus = '';
                 }, 1500);
               } else {
-                self.wifiStatus = '连接失败: ' + (data.message || '未知错误');
+                self.wifiStatus = 'Connection failed: ' + (data.message || 'Unknown error');
                 self.wifiStatusType = 'error';
-                self.addLog('error', 'WiFi 连接失败: ' + (data.message || '未知错误'));
+                self.addLog('error', 'WiFi connection failed: ' + (data.message || 'Unknown error'));
               }
             },
             error: function(xhr) {
               self.wifiConnecting = false;
-              var msg = xhr.responseJSON ? xhr.responseJSON.message : '连接失败';
-              self.wifiStatus = '错误: ' + msg;
+              var msg = xhr.responseJSON ? xhr.responseJSON.message : 'Connection failed';
+              self.wifiStatus = 'Error: ' + msg;
               self.wifiStatusType = 'error';
-              self.addLog('error', 'WiFi 连接错误: ' + msg);
+              self.addLog('error', 'WiFi connection error: ' + msg);
             }
           });
         }

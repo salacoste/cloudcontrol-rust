@@ -1,6 +1,6 @@
 /* ============================================================
    CloudControl - Terminal Hacker Theme
-   复古终端黑客风格 - CRT显示器效果
+   Retro terminal hacker style - CRT monitor effect
    ============================================================ */
 
 @import url('https://fonts.googleapis.com/css2?family=VT323&family=Fira+Code:wght@300;400;500;600;700&family=JetBrains+Mono:wght@300;400;500;600;700&display=swap');
@@ -15,22 +15,22 @@
   --term-bg-light: #161b22;
   --term-border: #30363d;
 
-  /* === Matrix Green (经典绿色) === */
+  /* === Matrix Green (Classic Green) === */
   --term-green: #00ff41;
   --term-green-dim: #00cc33;
   --term-green-glow: rgba(0, 255, 65, 0.6);
 
-  /* === Amber (琥珀色终端) === */
+  /* === Amber (Amber Terminal) === */
   --term-amber: #ffb000;
   --term-amber-dim: #cc8c00;
   --term-amber-glow: rgba(255, 176, 0, 0.6);
 
-  /* === 当前主题色 (可切换) === */
+  /* === Current Theme Color (Switchable) === */
   --term-primary: var(--term-green);
   --term-primary-dim: var(--term-green-dim);
   --term-primary-glow: var(--term-green-glow);
 
-  /* === 其他颜色 === */
+  /* === Other Colors === */
   --term-cyan: #00ffff;
   --term-red: #ff3333;
   --term-yellow: #ffff00;
@@ -66,7 +66,7 @@ body {
   overflow-x: hidden;
 }
 
-/* CRT扫描线效果 */
+/* CRT Scanline Effect */
 body::before {
   content: '';
   position: fixed;
@@ -85,7 +85,7 @@ body::before {
   );
 }
 
-/* CRT边缘暗角 */
+/* CRT Edge Vignette */
 body::after {
   content: '';
   position: fixed;
@@ -116,7 +116,7 @@ body::after {
     inset 0 0 60px rgba(0, 255, 65, 0.03);
 }
 
-/* 窗口标题栏 */
+/* Window Title Bar */
 .term-titlebar {
   display: flex;
   align-items: center;
@@ -153,7 +153,7 @@ body::after {
   text-align: center;
 }
 
-/* 终端内容区 */
+/* Terminal Content Area */
 .term-content {
   padding: var(--term-padding);
   min-height: 200px;
@@ -203,7 +203,7 @@ body::after {
   border-radius: 3px;
 }
 
-/* 闪烁光标 */
+/* Blinking Cursor */
 .term-cursor {
   display: inline-block;
   width: 8px;
@@ -277,7 +277,7 @@ body::after {
   color: var(--term-yellow);
 }
 
-/* 状态指示灯 */
+/* Status Indicator Light */
 .term-indicator {
   width: 8px;
   height: 8px;
@@ -501,7 +501,7 @@ body::after {
   transition: width 0.3s;
 }
 
-/* ASCII进度条 */
+/* ASCII Progress Bar */
 .term-progress-ascii {
   font-family: var(--term-font);
   font-size: 12px;

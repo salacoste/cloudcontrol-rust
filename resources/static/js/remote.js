@@ -1,4 +1,4 @@
-/* Javascript */
+/* Javascript — v2-swipe-fix */
 $(function () {
   try {
     $('.btn-copy')
@@ -74,7 +74,7 @@ window.app = new Vue({
     power:"755",
     path:"/data/local/tmp/",
     screenWS: null,
-    // scrcpy 模式状态
+    // scrcpy mode state
     useScrcpyMode: false,
     scrcpyClient: null,
     browserURL: "",
@@ -111,7 +111,7 @@ window.app = new Vue({
       visible: false,
       shortcuts: [{
         command: "input keyevent POWER",
-        name: '删除',
+        name: 'Power',
       }]
     }, {}),
     topApp: {
@@ -119,7 +119,7 @@ window.app = new Vue({
       activity: '',
       pid: '',
     },
-    // 性能监控
+    // Performance monitoring
     perfStats: {
       fps: 0,
       screenshot: 0,
@@ -129,7 +129,7 @@ window.app = new Vue({
       screenshots: [],
       commands: []
     },
-    // 快捷短语
+    // Quick phrases
     phrases: [],
     newPhrase: '',
     phrasesCollapsed: false,
@@ -203,16 +203,16 @@ window.app = new Vue({
     this.canvas.fg_tree = document.getElementById('fgCanvas_tree');
     window.c = this.canvas.bg;
 
-    //重新调整大小
+    // Resize
     $(window).resize(function () {
       self.resizeScreen();
     });
 
-    //初始化jstree
+    // Initialize jstree
     this.initJstree();
-    //为知
+    // For reference
     this.activeMouseControl();
-    //检查版本
+    // Check version
     // this.checkVersion();
     this.initDragDealer();
 
@@ -222,12 +222,12 @@ window.app = new Vue({
       try { $('#json-renderer').jsonViewer(device, {}); } catch(e) {}
     })(this,device);
 
-    // 三级降级：scrcpy（硬件编码低延迟） → NIO（WebSocket截图） → HTTP（轮询）
+    // Three-level fallback: scrcpy (hardware encoding, low latency) -> NIO (WebSocket screenshots) -> HTTP (polling)
     var httpModeInitialized = false;
     var initHttpMode = function() {
       if (httpModeInitialized) return;
       httpModeInitialized = true;
-      console.log('[Fallback] 回退到 HTTP 模式');
+      console.log('[Fallback] Falling back to HTTP mode');
       self.enableTouch();
       self.openScreenStream();
     };
@@ -236,26 +236,26 @@ window.app = new Vue({
       return self.tryNIOMode();
     };
 
-    // 18秒超时保护，确保至少有一种模式能工作（scrcpy需要~10s启动）
+    // 18-second timeout protection, ensure at least one mode works (scrcpy needs ~10s to start)
     setTimeout(function() {
       if (!self.useScrcpyMode && !self.useNIOMode) {
-        console.log('[Fallback] 超时，使用 HTTP 模式');
+        console.log('[Fallback] Timeout, using HTTP mode');
         initHttpMode();
       }
     }, 18000);
 
-    // 尝试 scrcpy → NIO → HTTP
+    // Try scrcpy -> NIO -> HTTP
     this.tryScrcpyMode()
       .catch(function(err) {
-        console.log('[Scrcpy] 不可用:', err.message || err, '，尝试 NIO 模式');
+        console.log('[Scrcpy] Not available:', err.message || err, ', trying NIO mode');
         return initNIOMode();
       })
       .catch(function(err) {
-        console.log('[NIO] 不可用:', err.message || err, '，回退到 HTTP 模式');
+        console.log('[NIO] Not available:', err.message || err, ', falling back to HTTP mode');
         initHttpMode();
       });
 
-    // reserveDevice 单独处理，失败也不影响主功能
+    // reserveDevice handled separately, failure does not affect main functionality
     this.reserveDevice().catch(function(err) {
       console.log("reserveDevice failed:", err);
     });
@@ -292,27 +292,27 @@ window.app = new Vue({
       }
     }.bind(this), 200);
 
-    // 加载whatsinput输入法
+    // Load whatsinput IME
     this.loadWhatsinput()
 
-    // 启用键盘输入
+    // Enable keyboard input
     this.enableKeyboardInput()
 
-    // 加载快捷短语
+    // Load quick phrases
     this.loadPhrases()
   },
   methods: {
-    // Scrcpy 模式 — 硬件 H.264 编码，最低延迟
+    // Scrcpy mode - hardware H.264 encoding, lowest latency
     tryScrcpyMode: function() {
       var self = this;
       return new Promise(function(resolve, reject) {
-        // 检查 WebCodecs 支持
+        // Check WebCodecs support
         if (typeof ScrcpyClient === 'undefined' || !ScrcpyClient.isSupported()) {
           reject(new Error('WebCodecs not supported'));
           return;
         }
 
-        // 先检查 scrcpy 是否可用
+        // First check if scrcpy is available
         $.ajax({
           url: '/scrcpy/' + self.deviceUdid + '/status',
           method: 'GET',
@@ -324,13 +324,13 @@ window.app = new Vue({
             return;
           }
 
-          console.log('[Scrcpy] 状态检查通过，正在连接...');
+          console.log('[Scrcpy] Status check passed, connecting...');
           var canvas = document.getElementById('bgCanvas');
           var client = new ScrcpyClient(self.deviceUdid, canvas);
 
           client.onInit = function(msg) {
-            console.log('[Scrcpy] 初始化完成: ' + msg.width + 'x' + msg.height);
-            // 停止已有的 HTTP/NIO 截图流
+            console.log('[Scrcpy] Initialization complete: ' + msg.width + 'x' + msg.height);
+            // Stop existing HTTP/NIO screenshot streams
             if (self.screenWS) {
               try { self.screenWS.close(); } catch(e) {}
               self.screenWS = null;
@@ -345,16 +345,16 @@ window.app = new Vue({
               width: client.width,
               height: client.height
             });
-            // 更新 FPS
+            // Update FPS
             self.perfStats.fps = client.fps;
           };
 
           client.onDisconnect = function() {
-            console.log('[Scrcpy] 断开连接');
+            console.log('[Scrcpy] Disconnected');
             self.useScrcpyMode = false;
-            // 自动降级到 NIO
+            // Auto-fallback to NIO
             if (!self.useNIOMode) {
-              console.log('[Scrcpy] 尝试降级到 NIO 模式');
+              console.log('[Scrcpy] Attempting fallback to NIO mode');
               self.tryNIOMode().catch(function() {
                 self.enableTouch();
                 self.openScreenStream();
@@ -364,10 +364,10 @@ window.app = new Vue({
 
           client.connect()
             .then(function() {
-              console.log('[Scrcpy] 连接成功，启用 scrcpy 触控');
+              console.log('[Scrcpy] Connected, enabling scrcpy touch');
               self.enableScrcpyTouch();
 
-              // 创建假的 screenWS 用于兼容 toggleScreen
+              // Create fake screenWS for toggleScreen compatibility
               self.screenWS = {
                 close: function() {
                   client.disconnect();
@@ -386,7 +386,7 @@ window.app = new Vue({
       });
     },
 
-    // Scrcpy 模式的触控 — 直接发送二进制触控，延迟 < 5ms
+    // Scrcpy mode touch - direct binary touch, latency < 5ms
     enableScrcpyTouch: function() {
       var self = this;
       var element = this.canvas.fg;
@@ -472,10 +472,10 @@ window.app = new Vue({
         document.removeEventListener('mouseup', onMouseUp);
       }
 
-      console.log('[Scrcpy] 触控已启用（二进制协议，延迟 <5ms）');
+      console.log('[Scrcpy] Touch enabled (binary protocol, latency <5ms)');
     },
 
-    // NIO WebSocket 模式 - 更快的通信
+    // NIO WebSocket mode - faster communication
     tryNIOMode: function() {
       var self = this;
       return new Promise(function(resolve, reject) {
@@ -484,30 +484,30 @@ window.app = new Vue({
           return;
         }
 
-        console.log('[NIO] 正在连接...');
+        console.log('[NIO] Connecting...');
         var channel = new NIOChannel(self.deviceUdid);
 
         channel.connect()
           .then(function() {
-            console.log('[NIO] 连接成功，启用 NIO 模式');
+            console.log('[NIO] Connected, enabling NIO mode');
             self.nioChannel = channel;
             self.useNIOMode = true;
 
-            // 启动截图流
+            // Start screenshot stream
             self.openNIOScreenStream();
-            // 启用 NIO 触控
+            // Enable NIO touch
             self.enableNIOTouch();
 
             resolve();
           })
           .catch(function(err) {
-            console.log('[NIO] 连接失败:', err);
+            console.log('[NIO] Connection failed:', err);
             reject(err);
           });
       });
     },
 
-    // NIO 模式的屏幕流
+    // NIO mode screen stream
     openNIOScreenStream: function() {
       var self = this;
       var canvas = document.getElementById('bgCanvas');
@@ -517,7 +517,7 @@ window.app = new Vue({
       var nioStartTime = Date.now();
       var nioLastLogTime = Date.now();
 
-      // 监听截图事件 — binary blob 直接到 canvas, 零 base64 开销
+      // Listen for screenshot events - binary blob direct to canvas, zero base64 overhead
       self.nioChannel.on('screenshot', function(msg) {
         if (msg.status !== 'ok') return;
         var t0 = performance.now();
@@ -532,12 +532,12 @@ window.app = new Vue({
 
         var blobSize = source.size || 0;
 
-        // createImageBitmap 在后台线程解码，不阻塞主线程
+        // createImageBitmap decodes in background thread, does not block main thread
         createImageBitmap(source).then(function(bitmap) {
           var t1 = performance.now();
-          // 在下一个 vsync 渲染
+          // Render on next vsync
           requestAnimationFrame(function() {
-            // 只在尺寸变化时更新 canvas
+            // Only update canvas on size change
             if (bitmap.width !== lastWidth || bitmap.height !== lastHeight) {
               canvas.width = bitmap.width;
               canvas.height = bitmap.height;
@@ -553,7 +553,7 @@ window.app = new Vue({
             var t2 = performance.now();
             nioFrameCount++;
 
-            // 每 20 帧输出一次日志
+            // Log every 20 frames
             var now = Date.now();
             if (now - nioLastLogTime >= 2000) {
               var elapsed = (now - nioStartTime) / 1000;
@@ -573,7 +573,7 @@ window.app = new Vue({
         });
       });
 
-      // 订阅截图流，50ms 间隔
+      // Subscribe to screenshot stream, 50ms interval
       self.nioChannel.subscribe('screenshot', { interval: 50 });
       self.screenWS = {
         close: function() {
@@ -581,10 +581,10 @@ window.app = new Vue({
         }
       };
 
-      console.log('[NIO] 屏幕流已启动');
+      console.log('[NIO] Screen stream started');
     },
 
-    // NIO 模式的触控
+    // NIO mode touch
     enableNIOTouch: function() {
       var self = this;
       var element = this.canvas.fg;
@@ -635,12 +635,6 @@ window.app = new Vue({
       function onMouseMove(e) {
         if (!touchStart) return;
         e.preventDefault();
-        calculateBounds();
-
-        var x = e.pageX - screen.bounds.x;
-        var y = e.pageY - screen.bounds.y;
-        touchStart.endXP = x / screen.bounds.w;
-        touchStart.endYP = y / screen.bounds.h;
         activeFinger(0, e.pageX, e.pageY);
       }
 
@@ -653,16 +647,25 @@ window.app = new Vue({
         var x = Math.floor(touchStart.xP * canvas.width);
         var y = Math.floor(touchStart.yP * canvas.height);
 
-        // 判断点击还是滑动
-        if (touchStart.endXP !== undefined &&
-            (Math.abs(touchStart.endXP - touchStart.xP) > 0.02 ||
-             Math.abs(touchStart.endYP - touchStart.yP) > 0.02)) {
-          // 滑动
-          var x2 = Math.floor(touchStart.endXP * canvas.width);
-          var y2 = Math.floor(touchStart.endYP * canvas.height);
+        // Use absolute pixel distance for reliable swipe detection
+        var pixelDx = Math.abs(e.pageX - touchStart.pageX);
+        var pixelDy = Math.abs(e.pageY - touchStart.pageY);
+
+        if (pixelDx > 10 || pixelDy > 10) {
+          // Swipe — compute end position from mouseUp event directly
+          calculateBounds();
+          var endX = e.pageX - screen.bounds.x;
+          var endY = e.pageY - screen.bounds.y;
+          // Clamp to canvas bounds (mouse may exit canvas during swipe)
+          endX = Math.max(0, Math.min(screen.bounds.w - 1, endX));
+          endY = Math.max(0, Math.min(screen.bounds.h - 1, endY));
+          var x2 = Math.floor((endX / screen.bounds.w) * canvas.width);
+          var y2 = Math.floor((endY / screen.bounds.h) * canvas.height);
+          console.log('[NIO] Swipe:', x, y, '->', x2, y2, '(px:', pixelDx, pixelDy, ')');
           self.nioChannel.send('swipe', { x1: x, y1: y, x2: x2, y2: y2 });
         } else {
-          // 点击
+          // Click
+          console.log('[NIO] Touch:', x, y);
           self.nioChannel.send('touch', { x: x, y: y });
         }
 
@@ -671,21 +674,21 @@ window.app = new Vue({
         document.removeEventListener('mouseup', onMouseUp);
       }
 
-      console.log('[NIO] 触控已启用');
+      console.log('[NIO] Touch enabled');
     },
 
-    // 键盘输入功能
+    // Keyboard input functionality
     enableKeyboardInput: function() {
       var self = this;
 
-      // 监听键盘事件
+      // Listen for keyboard events
       document.addEventListener('keydown', function(e) {
-        // 如果焦点在输入框中，不处理
+        // If focus is in an input field, do not handle
         if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') {
           return;
         }
 
-        // 特殊按键处理
+        // Special key handling
         var specialKeys = ['Enter', 'Backspace', 'Delete', 'Tab', 'Escape',
                           'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight',
                           'Home', 'End'];
@@ -696,14 +699,14 @@ window.app = new Vue({
           return;
         }
 
-        // 普通字符输入
+        // Regular character input
         if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
           e.preventDefault();
           self.sendTextInput(e.key);
         }
       });
 
-      console.log('键盘输入已启用 - 直接打字即可输入到手机');
+      console.log('Keyboard input enabled - type directly to input to phone');
     },
 
     sendTextInput: function(text) {
@@ -714,7 +717,7 @@ window.app = new Vue({
         contentType: 'application/json',
         data: JSON.stringify({ text: text })
       }).fail(function(err) {
-        console.log('输入失败:', err);
+        console.log('Input failed:', err);
       });
     },
 
@@ -726,11 +729,11 @@ window.app = new Vue({
         contentType: 'application/json',
         data: JSON.stringify({ key: key })
       }).fail(function(err) {
-        console.log('按键失败:', err);
+        console.log('Key press failed:', err);
       });
     },
 
-    // 发送输入框中的文字到手机
+    // Send input text to phone
     sendTextToPhone: function() {
       var self = this;
       var text = this.inputText;
@@ -749,15 +752,15 @@ window.app = new Vue({
         data: JSON.stringify({ text: text })
       }).done(function(response) {
         self.updateCommandLatency(Date.now() - startTime);
-        console.log('输入成功:', response);
-        self.inputText = '';  // 清空输入框
+        console.log('Input succeeded:', response);
+        self.inputText = '';  // Clear input field
       }).fail(function(err) {
-        console.log('输入失败:', err);
-        alert('输入失败: ' + JSON.stringify(err));
+        console.log('Input failed:', err);
+        alert('Input failed: ' + JSON.stringify(err));
       });
     },
 
-    // 发送删除键
+    // Send backspace key
     sendBackspace: function() {
       var self = this;
       $.ajax({
@@ -768,13 +771,13 @@ window.app = new Vue({
       });
     },
 
-    // 上传文件到手机
+    // Upload file to phone
     uploadFile: function(event) {
       var self = this;
       var file = event.target.files[0];
       if (!file) return;
 
-      self.uploadStatus = '上传中: ' + file.name + '...';
+      self.uploadStatus = 'Uploading: ' + file.name + '...';
 
       var formData = new FormData();
       formData.append('file', file);
@@ -789,11 +792,11 @@ window.app = new Vue({
         self.uploadStatus = '✓ ' + response.message;
         setTimeout(function() { self.uploadStatus = ''; }, 5000);
       }).fail(function(err) {
-        self.uploadStatus = '✗ 上传失败';
-        console.log('上传失败:', err);
+        self.uploadStatus = '✗ Upload failed';
+        console.log('Upload failed:', err);
       });
 
-      // 清空文件选择，允许重复选择同一文件
+      // Clear file selection, allow re-selecting the same file
       event.target.value = '';
     },
 
@@ -1324,7 +1327,7 @@ window.app = new Vue({
         }
       }
 
-      //频幕点击
+      // Screen click
       function mouseDownListener(event) {
         var e = event;
         if (e.originalEvent) {
@@ -1474,10 +1477,10 @@ window.app = new Vue({
       return def.promise();
     },
     startLowQualityScreenRecord: function (event) {
-      $(event.target).notify("初始化中 ...");
+      $(event.target).notify("Initializing ...");
       this.connectImage2VideoWebSocket(2)
         .done(function (ws) {
-          $(event.target).notify("视频录制中, 再次点击停止");
+          $(event.target).notify("Video recording, click again to stop");
           var key = setInterval(function () {
             $.ajax({
               url: this.deviceUrl + "/screenshot/0?thumbnail=800x800",
@@ -1501,14 +1504,14 @@ window.app = new Vue({
           }
         }.bind(this))
         .fail(function (err) {
-          $(event.target).notify("录制启动失败, 请点击【关于我们】，联系网站管理员", "error");
+          $(event.target).notify("Recording failed to start, please click About Us to contact the administrator", "error");
         })
     },
     startVideoRecord: function (event) {
-      $(event.target).notify("初始化中 ...");
+      $(event.target).notify("Initializing ...");
       this.connectImage2VideoWebSocket(10)
         .done(function (ws) {
-          $(event.target).notify("视频录制中, 再次点击停止");
+          $(event.target).notify("Video recording, click again to stop");
           var cache = {}
           function receiver(_, data) {
             cache.last = data;
@@ -1527,7 +1530,7 @@ window.app = new Vue({
           this.videoReceiver = receiver;
         }.bind(this))
         .fail(function (err) {
-          $(event.target).notify("录制启动失败, 请点击【关于我们】，联系网站管理员", "error");
+          $(event.target).notify("Recording failed to start, please click About Us to contact the administrator", "error");
         })
     },
     stopVideoRecord: function () {
@@ -1536,7 +1539,7 @@ window.app = new Vue({
         this.videoReceiver.ws.close()
         clearInterval(this.videoReceiver.key);
         this.videoReceiver = null;
-        $(event.target).notify("视频录制成功");
+        this.$notify({ title: 'Video', message: 'Video recording successful', type: 'success' });
       }
     },
     toggleScreen: function () {
@@ -1554,11 +1557,11 @@ window.app = new Vue({
       this.imageBlobBuffer.forEach(function (blob) {
         fd.append('file', blob);
       });
-      $(event.target).notify("视频后台合成中，请稍候 ...");
+      $(event.target).notify("Video compositing in background, please wait ...");
       console.log("upload")
       $.ajax({
         type: "post",
-        url: "http://10.246.46.160:7000/img2video", // TODO: 临时地址，需要后期更换
+        url: "http://10.246.46.160:7000/img2video", // TODO: temporary address, needs to be replaced later
         processData: false,
         contentType: false,
         data: fd,
@@ -1566,7 +1569,7 @@ window.app = new Vue({
       }).done(function (data) {
         console.log(data.url);
         this.videoUrl = data.url;
-        $(event.target).notify("合成完毕");
+        this.$notify({ title: 'Video', message: 'Compositing complete', type: 'success' });
       }.bind(this))
     },
     saveScreenshot: function () {
@@ -1684,16 +1687,16 @@ window.app = new Vue({
       var self = this;
       console.log("keyevent", meta);
 
-      // 使用后端代理 API，避免跨域问题
+      // Use backend proxy API to avoid CORS issues
       return $.ajax({
         url: '/inspector/' + self.deviceUdid + '/keyevent',
         method: 'POST',
         contentType: 'application/json',
         data: JSON.stringify({ key: meta })
       }).done(function(ret) {
-        console.log("keyevent 成功:", ret);
+        console.log("keyevent succeeded:", ret);
       }).fail(function(err) {
-        console.log("keyevent 失败:", err);
+        console.log("keyevent failed:", err);
       });
     },
     shell: function (command) {
@@ -1723,7 +1726,7 @@ window.app = new Vue({
         this.showError("<p>Local server not started, start with</p><pre>$ python -m weditor</pre>");
       }
     },
-    //左边屏幕移动
+    // Left screen drag
     initDragDealer: function () {
       var self = this;
       var updateFunc = null;
@@ -1875,10 +1878,10 @@ window.app = new Vue({
       var screenshotUrl = '/inspector/' + self.deviceUdid + '/screenshot/img?q=60&s=0.6';
 
       // ═══════════════════════════════════════════════
-      //  流水线双缓冲 (Pipeline Double Buffering)
+      //  Pipeline Double Buffering
       // ═══════════════════════════════════════════════
 
-      // 获取一帧：返回 Promise<{bitmap, latency, fetchTime, decodeTime}>
+      // Fetch one frame: returns Promise<{bitmap, latency, fetchTime, decodeTime}>
       function fetchFrame() {
         var t0 = performance.now();
         var t_fetch_done;
@@ -1902,21 +1905,21 @@ window.app = new Vue({
           });
       }
 
-      // 流水线核心：处理当前帧，同时启动下一帧获取
+      // Pipeline core: process current frame while starting next frame fetch
       function pipeline(frameProm) {
         if (!running) return;
 
         frameProm.then(function(frame) {
           if (!running) { frame.bitmap.close(); return; }
 
-          // ① 立即启动下一帧获取（不等当前帧渲染完）
+          // Step 1: Immediately start fetching next frame (without waiting for current frame to render)
           var nextProm = fetchFrame();
 
-          // ② 在下一个 vsync 时渲染当前帧
+          // Step 2: Render current frame on next vsync
           requestAnimationFrame(function() {
             if (!running) { frame.bitmap.close(); return; }
 
-            // 只在尺寸变化时更新 canvas（避免 layout reflow）
+            // Only update canvas on size change (avoid layout reflow)
             if (frame.bitmap.width !== lastWidth || frame.bitmap.height !== lastHeight) {
               canvas.width = frame.bitmap.width;
               canvas.height = frame.bitmap.height;
@@ -1925,9 +1928,9 @@ window.app = new Vue({
               self.resizeScreen(frame.bitmap);
             }
 
-            // 绘制帧
+            // Draw frame
             ctx.drawImage(frame.bitmap, 0, 0);
-            frame.bitmap.close(); // 释放 GPU 内存
+            frame.bitmap.close(); // Release GPU memory
 
             window.app.loading = false;
             self.updateScreenshotLatency(Math.round(frame.latency));
@@ -1949,11 +1952,11 @@ window.app = new Vue({
             }
           });
 
-          // ③ 继续流水线（下一帧到达后重复此过程）
+          // Step 3: Continue pipeline (repeat when next frame arrives)
           pipeline(nextProm);
 
         }).catch(function(err) {
-          // 网络错误，短暂等待后重试
+          // Network error, retry after brief wait
           if (running) {
             console.warn('[HTTP] Screenshot error:', err.message);
             setTimeout(function() { pipeline(fetchFrame()); }, 100);
@@ -1961,13 +1964,13 @@ window.app = new Vue({
         });
       }
 
-      // 启动流水线
+      // Start pipeline
       pipeline(fetchFrame());
       console.log('[Screenshot] Pipeline double-buffer started (raw JPEG + createImageBitmap)');
     },
     enableTouch: function () {
       /**
-       * TOUCH HANDLING - 使用后端 API 实现
+       * TOUCH HANDLING - implemented via backend API
        */
       var self = this;
       var element = this.canvas.fg;
@@ -1976,14 +1979,13 @@ window.app = new Vue({
         bounds: {}
       }
 
-      // 简化的触控变量
+      // Simplified touch variables
       var touchStart = null;
 
-      // 模拟 control 对象
+      // Simulated control object
       var control = this.control = {
         touchDown: function(id, xP, yP, pressure) {
           touchStart = { xP: xP, yP: yP };
-          console.log("touchDown:", xP, yP);
         },
         touchMove: function(id, xP, yP, pressure) {
           if (touchStart) {
@@ -1998,17 +2000,20 @@ window.app = new Vue({
           var x = Math.floor(touchStart.xP * canvas.width);
           var y = Math.floor(touchStart.yP * canvas.height);
 
-          console.log("touchUp: canvas=", canvas.width, canvas.height, "pos=", x, y);
-
           var cmdStartTime = Date.now();
-          // 判断是点击还是滑动
-          if (touchStart.endXP !== undefined &&
-              (Math.abs(touchStart.endXP - touchStart.xP) > 0.02 ||
-               Math.abs(touchStart.endYP - touchStart.yP) > 0.02)) {
-            // 滑动
-            var x2 = Math.floor(touchStart.endXP * canvas.width);
-            var y2 = Math.floor(touchStart.endYP * canvas.height);
-            console.log("swipe:", x, y, "->", x2, y2);
+          // Use pixel distance for reliable swipe detection
+          var pixelDx = touchStart.pixelDx || 0;
+          var pixelDy = touchStart.pixelDy || 0;
+          var isSwipe = (pixelDx > 10 || pixelDy > 10);
+
+          if (isSwipe && touchStart.endXP !== undefined) {
+            // Clamp to valid range (mouse may exit canvas during swipe)
+            var endXP = Math.max(0, Math.min(1, touchStart.endXP));
+            var endYP = Math.max(0, Math.min(1, touchStart.endYP));
+            // Swipe
+            var x2 = Math.floor(endXP * canvas.width);
+            var y2 = Math.floor(endYP * canvas.height);
+            console.log("[HTTP] Swipe:", x, y, "->", x2, y2, "(px:", pixelDx, pixelDy, ")");
             $.ajax({
               url: '/inspector/' + self.deviceUdid + '/touch',
               method: 'POST',
@@ -2018,8 +2023,8 @@ window.app = new Vue({
               self.updateCommandLatency(Date.now() - cmdStartTime);
             });
           } else {
-            // 点击
-            console.log("click:", x, y);
+            // Click
+            console.log("[HTTP] Touch:", x, y);
             $.ajax({
               url: '/inspector/' + self.deviceUdid + '/touch',
               method: 'POST',
@@ -2088,14 +2093,16 @@ window.app = new Vue({
             pageX = e.pageX;
             pageY = e.pageY;
             element.removeEventListener('mousemove', mouseHoverListener);
-            element.addEventListener('mousemove', mouseMoveListener);
+            document.addEventListener('mousemove', mouseMoveListener);
         }
 
         activeFinger(0, pageX, pageY, pressure);
-        //计算点击坐标
+        // Calculate click coordinates
         var scaled = coords(screen.bounds.w, screen.bounds.h, x, y, self.rotation);
-        console.log(scaled);
         control.touchDown(0, scaled.xP, scaled.yP, pressure);
+        // Store page coordinates for pixel-distance swipe detection
+        touchStart.pageX = pageX;
+        touchStart.pageY = pageY;
         control.touchCommit();
 
         document.addEventListener('mouseup', mouseUpListener);
@@ -2155,15 +2162,33 @@ window.app = new Vue({
         }
         e.preventDefault()
 
+        // Compute pixel distance and set end coords from mouseUp event
+        if (touchStart && touchStart.pageX !== undefined) {
+          var upPageX = e.pageX || (e.changedTouches && e.changedTouches[0].pageX) || 0;
+          var upPageY = e.pageY || (e.changedTouches && e.changedTouches[0].pageY) || 0;
+          touchStart.pixelDx = Math.abs(upPageX - touchStart.pageX);
+          touchStart.pixelDy = Math.abs(upPageY - touchStart.pageY);
+          // Ensure end position is set for swipe (in case mousemove missed it)
+          if ((touchStart.pixelDx > 10 || touchStart.pixelDy > 10) && touchStart.endXP === undefined) {
+            calculateBounds();
+            var endX = upPageX - screen.bounds.x;
+            var endY = upPageY - screen.bounds.y;
+            var scaled = coords(screen.bounds.w, screen.bounds.h, endX, endY, self.rotation);
+            touchStart.endXP = scaled.xP;
+            touchStart.endYP = scaled.yP;
+          }
+        }
+
         control.touchUp(0)
         control.touchCommit();
         stopMousing()
       }
 
       function stopMousing() {
-        element.removeEventListener('mousemove', mouseMoveListener);
-        // element.addEventListener('mousemove', mouseHoverListener);
+        document.removeEventListener('mousemove', mouseMoveListener);
         document.removeEventListener('mouseup', mouseUpListener);
+        document.removeEventListener('touchend', mouseUpListener);
+        element.removeEventListener('touchmove', touchMoveListener);
         deactiveFinger(0);
       }
 
@@ -2233,10 +2258,10 @@ window.app = new Vue({
         fromYP = toYP;
         mouseWheelDelayTouchUp()
       }
-      // TODO  优化 支持手机浏览器手势
+      // TODO optimize and support mobile browser gestures
       /* bind listeners */
-      element.addEventListener('mousedown', function (){mouseDownListener(event,"mousedown")});
-      element.addEventListener('touchstart', function (){mouseDownListener(event,"touchstart")});
+      element.addEventListener('mousedown', function (event){mouseDownListener(event,"mousedown")});
+      element.addEventListener('touchstart', function (event){mouseDownListener(event,"touchstart")});
     },
     refreshTopApp() {
             this.runShell("dumpsys activity top").then(ret => {
@@ -2251,10 +2276,9 @@ window.app = new Vue({
             })
     },
     addTopAppToShortcut() {
-      this.$prompt('给 <code>' + this.topApp.packageName + '</code> 起个名字', '快捷方式添加', {
-        confirmButtonText: '确定',
-        cancelButtonText: '取消',
-        dangerouslyUseHTMLString: true,
+      this.$prompt('Name for ' + this.topApp.packageName, 'Add Shortcut', {
+        confirmButtonText: 'OK',
+        cancelButtonText: 'Cancel',
       }).then(({ value }) => {
         let command = ["monkey", "-p", this.topApp.packageName, "-c", "android.intent.category.LAUNCHER", "1"].join(" ")
         this.addShortcut(value, command)
@@ -2285,7 +2309,7 @@ window.app = new Vue({
       })
     },
 
-    // ===== 性能监控功能 =====
+    // ===== Performance monitoring =====
     updateScreenshotLatency: function(latency) {
       this.perfHistory.screenshots.push(latency);
       if (this.perfHistory.screenshots.length > 10) {
@@ -2307,7 +2331,7 @@ window.app = new Vue({
       this.perfStats.command = Math.round(sum / this.perfHistory.commands.length);
     },
 
-    // ===== 快捷短语功能 =====
+    // ===== Quick phrase functionality =====
     loadPhrases: function() {
       try {
         var saved = localStorage.getItem('cloudcontrol_phrases');
@@ -2315,7 +2339,7 @@ window.app = new Vue({
           this.phrases = JSON.parse(saved);
         }
       } catch (e) {
-        console.log('加载快捷短语失败:', e);
+        console.log('Failed to load quick phrases:', e);
       }
     },
 
@@ -2323,7 +2347,7 @@ window.app = new Vue({
       try {
         localStorage.setItem('cloudcontrol_phrases', JSON.stringify(this.phrases));
       } catch (e) {
-        console.log('保存快捷短语失败:', e);
+        console.log('Failed to save quick phrases:', e);
       }
     },
 
@@ -2352,15 +2376,15 @@ window.app = new Vue({
         data: JSON.stringify({ text: phrase })
       }).done(function(response) {
         self.updateCommandLatency(Date.now() - startTime);
-        $.notify('已发送: ' + (phrase.length > 20 ? phrase.substring(0, 20) + '...' : phrase), 'success');
+        $.notify('Sent: ' + (phrase.length > 20 ? phrase.substring(0, 20) + '...' : phrase), 'success');
       }).fail(function(err) {
-        $.notify('发送失败', 'error');
-        console.log('短语发送失败:', err);
+        $.notify('Send failed', 'error');
+        console.log('Phrase send failed:', err);
       });
     },
 
     clearAllPhrases: function() {
-      if (confirm('确定要清空所有快捷短语吗？')) {
+      if (confirm('Are you sure you want to clear all quick phrases?')) {
         this.phrases = [];
         this.savePhrases();
       }
@@ -2368,16 +2392,16 @@ window.app = new Vue({
   }
 })
 
-// 确保触控始终初始化的备用方案
+// Fallback to ensure touch is always initialized
 window.addEventListener('load', function() {
   setTimeout(function() {
     if (window.app && !window.app.control && !window.app.useScrcpyMode) {
-      console.log('[Fallback] 强制初始化触控和屏幕流');
+      console.log('[Fallback] Force initializing touch and screen stream');
       try {
         window.app.enableTouch();
         window.app.openScreenStream();
       } catch (e) {
-        console.error('[Fallback] 初始化失败:', e);
+        console.error('[Fallback] Initialization failed:', e);
       }
     }
   }, 2000);

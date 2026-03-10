@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-  <title>CloudControl - 远程控制</title>
+  <title>CloudControl - Remote Control</title>
   <link rel="stylesheet" href="/static/css/terminal-theme.css">
   <link rel="stylesheet" href="/static/dropzone/dropzone.min.css">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@2.9.2/dist/xterm.min.css">
@@ -72,7 +72,7 @@
       box-shadow: 0 0 30px rgba(0, 255, 65, 0.1);
     }
 
-    /* 确保 fgCanvas 正确覆盖 bgCanvas */
+    /* Ensure fgCanvas correctly overlays bgCanvas */
     #fgCanvas {
       position: absolute !important;
       z-index: 10 !important;
@@ -521,7 +521,7 @@
      }
     }
 
-    /* ===== 性能监控面板 ===== */
+    /* ===== Performance Monitor Panel ===== */
     .term-perf-panel {
       padding: 8px 12px;
       background: var(--term-bg-dark);
@@ -556,7 +556,7 @@
       color: var(--term-red);
     }
 
-    /* ===== 快捷短语面板 ===== */
+    /* ===== Quick Phrases Panel ===== */
     .term-phrases-panel {
       background: var(--term-bg-dark);
       border-top: 1px solid var(--term-border);
@@ -869,18 +869,18 @@
           </button>
         </div>
 
-        <!-- 性能监控面板 -->
+        <!-- Performance Monitor Panel -->
         <div class="term-perf-panel">
           <div class="term-perf-item">
             <span class="term-perf-label">FPS:</span>
             <span class="term-perf-value">[[perfStats.fps]]</span>
           </div>
           <div class="term-perf-item">
-            <span class="term-perf-label">截图:</span>
+            <span class="term-perf-label">Screenshot:</span>
             <span class="term-perf-value" :class="{'warning': perfStats.screenshot > 200, 'error': perfStats.screenshot > 500}">[[perfStats.screenshot]]ms</span>
           </div>
           <div class="term-perf-item">
-            <span class="term-perf-label">命令:</span>
+            <span class="term-perf-label">Command:</span>
             <span class="term-perf-value" :class="{'warning': perfStats.command > 50, 'error': perfStats.command > 100}">[[perfStats.command]]ms</span>
           </div>
         </div>
@@ -935,7 +935,7 @@
             <input type="text" class="term-text-input" placeholder="> input_text --send"
                    v-model="inputText" @keydown.enter="sendTextToPhone">
             <button class="term-btn term-btn-primary" @click="sendTextToPhone">SEND</button>
-            <button class="term-btn term-btn-ghost" @click="sendBackspace" title="删除">
+            <button class="term-btn term-btn-ghost" @click="sendBackspace" title="Delete">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M21 4H8l-7 8 7 8h13a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2z"/>
                 <line x1="18" y1="9" x2="12" y2="15"/>
@@ -957,14 +957,14 @@
           </div>
         </div>
 
-        <!-- 快捷短语面板 -->
+        <!-- Quick Phrases Panel -->
         <div class="term-phrases-panel" :class="{collapsed: phrasesCollapsed}">
           <div class="term-phrases-header" @click="phrasesCollapsed = !phrasesCollapsed">
             <div class="term-phrases-title">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
               </svg>
-              <span>快捷短语</span>
+              <span>Quick Phrases</span>
             </div>
             <button class="term-phrases-toggle" @click.stop="phrasesCollapsed = !phrasesCollapsed">
               <svg v-if="phrasesCollapsed" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -977,25 +977,25 @@
           </div>
           <div class="term-phrases-content">
             <div class="term-phrases-input">
-              <input type="text" v-model="newPhrase" @keydown.enter="addPhrase" placeholder="输入短语后回车添加...">
+              <input type="text" v-model="newPhrase" @keydown.enter="addPhrase" placeholder="Type a phrase and press Enter to add...">
               <button class="term-btn term-btn-ghost" @click="addPhrase" style="padding: 4px 8px;">+</button>
             </div>
             <div class="term-phrases-list" v-if="phrases.length > 0">
-              <div v-for="(phrase, index) in phrases" :key="index" class="term-phrase-item" @click="sendPhrase(phrase)" title="点击发送">
+              <div v-for="(phrase, index) in phrases" :key="index" class="term-phrase-item" @click="sendPhrase(phrase)" title="Click to send">
                 <svg class="term-phrase-send" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>
                 </svg>
                 <span class="term-phrase-text">[[phrase]]</span>
-                <span class="term-phrase-delete" @click.stop="deletePhrase(index)" title="删除">×</span>
+                <span class="term-phrase-delete" @click.stop="deletePhrase(index)" title="Delete">×</span>
               </div>
             </div>
             <div v-else class="term-phrases-empty">
-              暂无快捷短语，输入后回车添加
+              No quick phrases yet. Type one and press Enter to add.
             </div>
           </div>
           <div class="term-phrases-footer">
-            <span class="term-phrases-count">[[ phrases.length ]] 条短语</span>
-            <button class="term-phrases-clear" @click="clearAllPhrases" v-if="phrases.length > 0">清空全部</button>
+            <span class="term-phrases-count">[[ phrases.length ]] phrases</span>
+            <button class="term-phrases-clear" @click="clearAllPhrases" v-if="phrases.length > 0">Clear All</button>
           </div>
         </div>
       </div>
@@ -1038,7 +1038,7 @@
         <div class="term-tab-content">
           <!-- Home Tab -->
           <div class="term-tab-pane" :class="{active: activeTab === 'home'}">
-            <!-- [1] 设备概览 -->
+            <!-- [1] Device Overview -->
             <div class="term-device-header">
               <div class="term-device-name">[[deviceInfo.brand || '--']] [[deviceInfo.model || '--']]</div>
               <div class="term-device-subtitle">Android [[deviceInfo.version || '--']] | SDK [[deviceInfo.sdk || '--']]</div>
@@ -1059,12 +1059,12 @@
               </div>
             </div>
 
-            <!-- [2] 硬件监控 -->
+            <!-- [2] Hardware Monitor -->
             <div class="term-section-header" style="margin-top: 20px;">
               <span class="term-prompt">root@device</span>:<span class="term-path">~</span>$ cat /proc/hw_status
             </div>
 
-            <!-- 电池 -->
+            <!-- Battery -->
             <div class="term-monitor-item">
               <div class="term-monitor-label">BATTERY</div>
               <div class="term-progress-bar">
@@ -1073,7 +1073,7 @@
               <div class="term-monitor-detail">[[batteryLevel]]% · [[batteryTemp]] · [[batteryStatus]]</div>
             </div>
 
-            <!-- 内存 -->
+            <!-- Memory -->
             <div class="term-monitor-item">
               <div class="term-monitor-label">MEMORY</div>
               <div class="term-progress-bar">
@@ -1082,7 +1082,7 @@
               <div class="term-monitor-detail">[[deviceInfo.memory ? deviceInfo.memory.around : '--']]</div>
             </div>
 
-            <!-- 显示 + CPU -->
+            <!-- Display + CPU -->
             <div class="term-info-grid" style="grid-template-columns: repeat(2, 1fr); margin-top: 12px;">
               <div class="term-info-item">
                 <div class="term-info-label">DISPLAY</div>
@@ -1094,7 +1094,7 @@
               </div>
             </div>
 
-            <!-- [3] 快捷操作 -->
+            <!-- [3] Quick Actions -->
             <div class="term-section-header" style="margin-top: 24px;">
               <span class="term-prompt">root@device</span>:<span class="term-path">~</span>$ ./quick_actions.sh
             </div>
@@ -1319,7 +1319,7 @@
 
   <script src="/static/js/nio-client.js"></script>
   <script src="/static/js/scrcpy-client.js"></script>
-  <script src="/static/js/remote.js?v=4"></script>
+  <script src="/static/js/remote.js?v=6"></script>
 
   <script>
     // Extend Vue app for tabs

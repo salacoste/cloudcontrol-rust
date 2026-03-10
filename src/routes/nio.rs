@@ -58,6 +58,11 @@ pub async fn nio_websocket(
             .unwrap_or("")
             .to_string();
         let port = device.get("port").and_then(|v| v.as_i64()).unwrap_or(9008);
+        let serial = device
+            .get("serial")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
         let client = Arc::new(AtxClient::new(&ip, port, &udid_clone));
 
         // Screenshot streaming state
@@ -277,12 +282,19 @@ pub async fn nio_websocket(
                                 as i32;
                             let y2 = event_data.get("y2").and_then(|v| v.as_i64()).unwrap_or(0)
                                 as i32;
-                            let duration =
-                                event_data.get("duration").and_then(|v| v.as_f64()).unwrap_or(0.2);
+                            let duration_ms = (event_data.get("duration").and_then(|v| v.as_f64()).unwrap_or(0.2) * 1000.0) as i32;
 
-                            match client.swipe(x1, y1, x2, y2, duration).await {
-                                Ok(_) => json!({"status": "ok", "type": "swipe"}),
-                                Err(e) => json!({"status": "error", "message": e}),
+                            // Use ADB input swipe — ATX JSON-RPC swipe silently fails on MIUI
+                            if !serial.is_empty() {
+                                match Adb::input_swipe(&serial, x1, y1, x2, y2, duration_ms.max(50).min(2000)).await {
+                                    Ok(_) => json!({"status": "ok", "type": "swipe"}),
+                                    Err(e) => json!({"status": "error", "message": e}),
+                                }
+                            } else {
+                                match client.swipe(x1, y1, x2, y2, (duration_ms as f64 / 1000.0).max(0.05).min(2.0)).await {
+                                    Ok(_) => json!({"status": "ok", "type": "swipe"}),
+                                    Err(e) => json!({"status": "error", "message": e}),
+                                }
                             }
                         }
 

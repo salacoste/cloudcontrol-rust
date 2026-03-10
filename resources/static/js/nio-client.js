@@ -1,12 +1,12 @@
 /**
- * NIO 风格的 WebSocket 客户端
- * 参考 Java NIO 设计：Channel + Buffer + Selector
+ * NIO-style WebSocket client
+ * Inspired by Java NIO design: Channel + Buffer + Selector
  *
- * 特点：
- * 1. 单一 WebSocket 连接处理所有通信
- * 2. 事件驱动，异步非阻塞
- * 3. 自动重连和心跳
- * 4. 消息队列和批处理
+ * Features:
+ * 1. Single WebSocket connection handles all communication
+ * 2. Event-driven, asynchronous non-blocking
+ * 3. Auto-reconnect and heartbeat
+ * 4. Message queue and batch processing
  */
 
 class NIOChannel {
@@ -23,36 +23,39 @@ class NIOChannel {
         this.connected = false;
         this.reconnectAttempts = 0;
 
-        // 事件处理器 - 类似 Selector
+        // Event handlers - similar to Selector
         this.handlers = new Map();
 
-        // 消息缓冲区 - 类似 Buffer
+        // Message buffer - similar to Buffer
         this.messageQueue = [];
         this.pendingRequests = new Map();
 
-        // 状态
+        // State
         this.subscriptions = new Set();
 
-        // 心跳
+        // Heartbeat
         this.heartbeatTimer = null;
+
+        // Monotonic message ID counter
+        this._msgSeq = 0;
     }
 
     /**
-     * 连接到服务器
+     * Connect to server
      */
     connect() {
         return new Promise((resolve, reject) => {
             const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
             const url = `${protocol}//${location.host}/nio/${this.udid}/ws`;
 
-            console.log('[NIO] 正在连接:', url);
+            console.log('[NIO] Connecting:', url);
 
             this.ws = new WebSocket(url);
             // Receive binary frames as Blob for zero-copy screenshot rendering
             this.ws.binaryType = 'blob';
 
             this.ws.onopen = () => {
-                console.log('[NIO] 连接成功');
+                console.log('[NIO] Connected');
                 this.connected = true;
                 this.reconnectAttempts = 0;
                 this._startHeartbeat();
@@ -62,7 +65,7 @@ class NIOChannel {
             };
 
             this.ws.onclose = (event) => {
-                console.log('[NIO] 连接关闭:', event.code, event.reason);
+                console.log('[NIO] Connection closed:', event.code, event.reason);
                 this.connected = false;
                 this._stopHeartbeat();
                 this._emit('disconnected');
@@ -70,7 +73,7 @@ class NIOChannel {
             };
 
             this.ws.onerror = (error) => {
-                console.error('[NIO] 连接错误:', error);
+                console.error('[NIO] Connection error:', error);
                 this._emit('error', error);
                 if (!this.connected) {
                     reject(error);
@@ -89,32 +92,38 @@ class NIOChannel {
     }
 
     /**
-     * 断开连接
+     * Disconnect
      */
     disconnect() {
-        this.reconnectAttempts = this.options.maxReconnectAttempts; // 阻止重连
+        this.reconnectAttempts = this.options.maxReconnectAttempts; // Prevent reconnection
         if (this.ws) {
             this.ws.close();
             this.ws = null;
         }
         this._stopHeartbeat();
         this.connected = false;
+        // Reject all pending requests
+        this.pendingRequests.forEach(function(pending) {
+            clearTimeout(pending.timer);
+            pending.reject(new Error('Disconnected'));
+        });
+        this.pendingRequests.clear();
     }
 
     /**
-     * 发送消息
+     * Send message
      */
     send(type, data = {}) {
         const message = {
             type: type,
             data: data,
-            id: Date.now().toString(36) + Math.random().toString(36).substr(2, 5)
+            id: (++this._msgSeq) + '_' + Math.random().toString(36).substr(2, 5)
         };
 
         if (this.connected && this.ws.readyState === WebSocket.OPEN) {
             this.ws.send(JSON.stringify(message));
         } else {
-            // 加入队列等待发送
+            // Queue for later sending
             if (this.messageQueue.length < this.options.messageQueueSize) {
                 this.messageQueue.push(message);
             }
@@ -124,7 +133,7 @@ class NIOChannel {
     }
 
     /**
-     * 发送请求并等待响应
+     * Send request and wait for response
      */
     request(type, data = {}, timeout = 5000) {
         return new Promise((resolve, reject) => {
@@ -140,7 +149,7 @@ class NIOChannel {
     }
 
     /**
-     * 订阅事件流
+     * Subscribe to event stream
      */
     subscribe(target, options = {}) {
         this.subscriptions.add(target);
@@ -148,7 +157,7 @@ class NIOChannel {
     }
 
     /**
-     * 取消订阅
+     * Unsubscribe
      */
     unsubscribe(target) {
         this.subscriptions.delete(target);
@@ -156,7 +165,7 @@ class NIOChannel {
     }
 
     /**
-     * 注册事件处理器
+     * Register event handler
      */
     on(event, handler) {
         if (!this.handlers.has(event)) {
@@ -167,7 +176,7 @@ class NIOChannel {
     }
 
     /**
-     * 移除事件处理器
+     * Remove event handler
      */
     off(event, handler) {
         if (this.handlers.has(event)) {
@@ -181,7 +190,7 @@ class NIOChannel {
     }
 
     /**
-     * 触发事件
+     * Emit event
      */
     _emit(event, data) {
         if (this.handlers.has(event)) {
@@ -189,20 +198,20 @@ class NIOChannel {
                 try {
                     handler(data);
                 } catch (e) {
-                    console.error('[NIO] 事件处理器错误:', e);
+                    console.error('[NIO] Event handler error:', e);
                 }
             });
         }
     }
 
     /**
-     * 处理收到的消息
+     * Handle received message
      */
     _handleMessage(raw) {
         try {
             const message = JSON.parse(raw);
 
-            // 检查是否是待处理请求的响应
+            // Check if this is a response to a pending request
             if (message.id && this.pendingRequests.has(message.id)) {
                 const { resolve, timer } = this.pendingRequests.get(message.id);
                 clearTimeout(timer);
@@ -211,18 +220,18 @@ class NIOChannel {
                 return;
             }
 
-            // 根据类型分发事件
+            // Dispatch event by type
             const eventType = message.type || 'message';
             this._emit(eventType, message);
             this._emit('message', message);
 
         } catch (e) {
-            console.error('[NIO] 消息解析错误:', e);
+            console.error('[NIO] Message parse error:', e);
         }
     }
 
     /**
-     * 刷新消息队列
+     * Flush message queue
      */
     _flushQueue() {
         while (this.messageQueue.length > 0 && this.connected) {
@@ -230,34 +239,34 @@ class NIOChannel {
             this.ws.send(JSON.stringify(message));
         }
 
-        // 重新订阅
+        // Re-subscribe
         this.subscriptions.forEach(target => {
             this.send('subscribe', { target });
         });
     }
 
     /**
-     * 尝试重连
+     * Attempt reconnection
      */
     _tryReconnect() {
         if (this.reconnectAttempts >= this.options.maxReconnectAttempts) {
-            console.log('[NIO] 达到最大重连次数，停止重连');
+            console.log('[NIO] Max reconnection attempts reached, stopping');
             this._emit('reconnect_failed');
             return;
         }
 
         this.reconnectAttempts++;
-        console.log(`[NIO] ${this.options.reconnectInterval}ms 后尝试重连 (${this.reconnectAttempts}/${this.options.maxReconnectAttempts})`);
+        console.log(`[NIO] Attempting reconnection in ${this.options.reconnectInterval}ms (${this.reconnectAttempts}/${this.options.maxReconnectAttempts})`);
 
         setTimeout(() => {
             this.connect().catch(() => {
-                // 连接失败会触发 onclose，继续重连
+                // Connection failure triggers onclose, continue reconnecting
             });
         }, this.options.reconnectInterval);
     }
 
     /**
-     * 启动心跳
+     * Start heartbeat
      */
     _startHeartbeat() {
         this._stopHeartbeat();
@@ -269,7 +278,7 @@ class NIOChannel {
     }
 
     /**
-     * 停止心跳
+     * Stop heartbeat
      */
     _stopHeartbeat() {
         if (this.heartbeatTimer) {
@@ -281,8 +290,8 @@ class NIOChannel {
 
 
 /**
- * NIO 屏幕控制器
- * 封装屏幕相关操作
+ * NIO Screen Controller
+ * Encapsulates screen-related operations
  */
 class NIOScreenController {
     constructor(channel, canvas) {
@@ -295,32 +304,32 @@ class NIOScreenController {
         this.frameCount = 0;
         this.lastFpsTime = Date.now();
 
-        // 绑定事件
+        // Bind events
         this.channel.on('screenshot', (msg) => this._onScreenshot(msg));
     }
 
     /**
-     * 开始屏幕流
+     * Start screen stream
      */
     start(interval = 50) {
         if (this.running) return;
         this.running = true;
         this.channel.subscribe('screenshot', { interval });
-        console.log('[NIO Screen] 开始屏幕流');
+        console.log('[NIO Screen] Screen stream started');
     }
 
     /**
-     * 停止屏幕流
+     * Stop screen stream
      */
     stop() {
         if (!this.running) return;
         this.running = false;
         this.channel.unsubscribe('screenshot');
-        console.log('[NIO Screen] 停止屏幕流');
+        console.log('[NIO Screen] Screen stream stopped');
     }
 
     /**
-     * 处理截图 — 支持二进制 Blob（新）和 base64 JSON（兼容）
+     * Handle screenshot - supports binary Blob (new) and base64 JSON (legacy)
      */
     _onScreenshot(msg) {
         if (!this.running || msg.status !== 'ok') return;
@@ -344,7 +353,7 @@ class NIOScreenController {
                 bitmap.close();
                 self.lastFrame = Date.now();
 
-                // 计算 FPS
+                // Calculate FPS
                 self.frameCount++;
                 var now = Date.now();
                 if (now - self.lastFpsTime >= 1000) {
@@ -357,28 +366,28 @@ class NIOScreenController {
     }
 
     /**
-     * 发送触摸事件
+     * Send touch event
      */
     touch(x, y) {
         this.channel.send('touch', { x, y });
     }
 
     /**
-     * 发送滑动事件
+     * Send swipe event
      */
     swipe(x1, y1, x2, y2, duration = 200) {
         this.channel.send('swipe', { x1, y1, x2, y2, duration: duration / 1000 });
     }
 
     /**
-     * 发送文字输入
+     * Send text input
      */
     input(text) {
         this.channel.send('input', { text });
     }
 
     /**
-     * 发送按键事件
+     * Send key event
      */
     keyevent(key) {
         this.channel.send('keyevent', { key });
@@ -386,6 +395,6 @@ class NIOScreenController {
 }
 
 
-// 导出
+// Export
 window.NIOChannel = NIOChannel;
 window.NIOScreenController = NIOScreenController;

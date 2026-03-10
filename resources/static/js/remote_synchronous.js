@@ -35,7 +35,7 @@ window.app = new Vue({
                 height: 1
             }
         },
-        //用于记录不是抓窗口视图参数
+        // Parameters for non-capture window view
         lastScreenSize2: {
             screen: {},
             canvas: {
@@ -262,7 +262,7 @@ window.app = new Vue({
         delayReload: function (msec) {
             setTimeout(this.screenDumpUI, msec || 1000);
         },
-        //老版本画布
+        // Old version canvas
         // openScreenStream: function () {
         //     var self = this;
         //     var BLANK_IMG =
@@ -309,13 +309,13 @@ window.app = new Vue({
         //
         //                 this.screenWS.img.screenWS = this.screenWS
         //                 this.screenWS.img.onload = function () {
-        //                     //如果不是主操作界面
+        //                     // If not the main operation screen
         //                     if(this.screenWS.canvas.id !="bgCanvas0"){
         //                         this.width = this.screenWS.canvas.width
         //                         this.height = this.screenWS.canvas.height
         //                         console.log(message.currentTarget.url + "  image" + this.width + " " + this.height)
         //                         this.screenWS.ctx.drawImage(this, 0, 0, this.width, this.height);
-        //                         //还原图片宽高
+        //                         // Restore image width and height
         //                         this.width = 400
         //                         this.height = 800
         //                     }else{
@@ -467,7 +467,7 @@ window.app = new Vue({
             console.log("screen websocket error")
           }
         },
-        // TODO 更改为minitouch版本
+        // TODO change to minitouch version
         // enableTouch: function () {
         //     /**
         //      * TOUCH HANDLING
@@ -479,7 +479,7 @@ window.app = new Vue({
         //         bounds: {}
         //     }
         //
-        //     //主屏幕
+        //     // Main screen
         //     var ws = new WebSocket(this.deviceUrl.replace("http:", "ws:") + "/minitouch")
         //     ws.onerror = function (ev) {
         //         console.log("minitouch websocket error:", ev)
@@ -492,7 +492,7 @@ window.app = new Vue({
         //     }
         //     this.control_list[0] = MiniTouch.createNew(ws);
         //
-        //     //其他频幕
+        //     // Other screens
         //     var ws_all = new WebSocket("ws://"+window.location.host+"/minitouch_all")
         //     ws_all.onerror = function (ev) {
         //         console.log("minitouch websocket error:", ev)
@@ -720,7 +720,7 @@ window.app = new Vue({
             var screen = {
                 bounds: {}
             }
-            //单台设备操控多台设备
+            // Single device controlling multiple devices
             for (var i=0;i<deviceList.length;i++) {
                 var ws = new WebSocket("ws://" + deviceList[i].src + ":" + deviceList[i].port + "/minitouch")
                 ws.onerror = function (ev) {

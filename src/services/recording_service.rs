@@ -825,4 +825,19 @@ impl RecordingService {
     pub async fn is_playing(&self, target_device_udid: &str) -> bool {
         self.recording_state.is_playing(target_device_udid).await
     }
+
+    /// Get the raw playback session for a device (used by background execution tasks).
+    pub async fn get_playback_session(&self, target_device_udid: &str) -> Option<PlaybackSession> {
+        self.recording_state.get_playback(target_device_udid).await
+    }
+
+    /// Advance playback progress by one action.
+    pub async fn advance_playback(&self, target_device_udid: &str) -> Result<i32, String> {
+        self.recording_state.increment_playback_progress(target_device_udid).await
+    }
+
+    /// Mark playback as completed.
+    pub async fn mark_playback_complete(&self, target_device_udid: &str) -> Result<(), String> {
+        self.recording_state.complete_playback(target_device_udid).await
+    }
 }

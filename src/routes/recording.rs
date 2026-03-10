@@ -1,8 +1,10 @@
+use crate::device::adb::Adb;
 use crate::models::recording::{
-    RecordActionRequest, StartRecordingRequest,
+    ActionType, RecordActionRequest, RecordedAction, StartRecordingRequest,
     StopRecordingRequest, EditActionRequest,
     StartPlaybackRequest,
 };
+use crate::services::recording_service::PlaybackStatus;
 use crate::state::AppState;
 use actix_web::{web, HttpResponse};
 use serde_json::json;
@@ -389,6 +391,93 @@ pub async fn delete_action(
 
 // ==================== Playback Endpoints ====================
 
+/// Execute a single recorded action on a target device via ATX client with ADB fallback.
+async fn execute_action_on_device(
+    state: &AppState,
+    target_device_udid: &str,
+    action: &RecordedAction,
+) -> Result<(), String> {
+    // Get device client from connection pool
+    let device = state.device_info_cache.get(target_device_udid).await;
+    let (ip, port, serial) = if let Some(ref dev) = device {
+        let ip = dev.get("ip").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let port = dev.get("port").and_then(|v| v.as_i64()).unwrap_or(9008);
+        let serial = dev.get("serial").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        (ip, port, serial)
+    } else {
+        // Try to look up the device from DB
+        let phone_service = crate::services::phone_service::PhoneService::new(state.db.clone());
+        let dev = phone_service.query_info_by_udid(target_device_udid).await
+            .map_err(|e| format!("Device lookup failed: {}", e))?
+            .ok_or_else(|| format!("Device {} not found", target_device_udid))?;
+        let ip = dev.get("ip").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let port = dev.get("port").and_then(|v| v.as_i64()).unwrap_or(9008);
+        let serial = dev.get("serial").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        state.device_info_cache.insert(target_device_udid.to_string(), dev).await;
+        (ip, port, serial)
+    };
+
+    let client = state.connection_pool.get_or_create(target_device_udid, &ip, port).await;
+
+    match action.action_type {
+        ActionType::Tap => {
+            let x = action.x.unwrap_or(0);
+            let y = action.y.unwrap_or(0);
+            if let Err(e) = client.click(x, y).await {
+                tracing::warn!("[PLAYBACK] ATX tap failed, trying ADB: {}", e);
+                if !serial.is_empty() {
+                    Adb::input_tap(&serial, x, y).await?;
+                } else {
+                    return Err(e);
+                }
+            }
+        }
+        ActionType::Swipe => {
+            let x = action.x.unwrap_or(0);
+            let y = action.y.unwrap_or(0);
+            let x2 = action.x2.unwrap_or(x);
+            let y2 = action.y2.unwrap_or(y);
+            let duration_ms = action.duration_ms.unwrap_or(200);
+            let duration_secs = (duration_ms as f64 / 1000.0).max(0.05).min(2.0);
+            if let Err(e) = client.swipe(x, y, x2, y2, duration_secs).await {
+                tracing::warn!("[PLAYBACK] ATX swipe failed, trying ADB: {}", e);
+                if !serial.is_empty() {
+                    Adb::input_swipe(&serial, x, y, x2, y2, duration_ms.max(50).min(2000)).await?;
+                } else {
+                    return Err(e);
+                }
+            }
+        }
+        ActionType::Input => {
+            let text = action.text.as_deref().unwrap_or("");
+            if text.is_empty() {
+                return Ok(());
+            }
+            if let Err(e) = client.input_text(text).await {
+                tracing::warn!("[PLAYBACK] ATX input failed, trying ADB: {}", e);
+                if !serial.is_empty() {
+                    Adb::input_text(&serial, text).await?;
+                } else {
+                    return Err(e);
+                }
+            }
+        }
+        ActionType::KeyEvent => {
+            let key_code = action.key_code.unwrap_or(0);
+            if let Err(e) = client.shell_cmd(&format!("input keyevent {}", key_code)).await {
+                tracing::warn!("[PLAYBACK] ATX keyevent failed, trying ADB: {}", e);
+                if !serial.is_empty() {
+                    let key_str = key_code.to_string();
+                    Adb::input_keyevent(&serial, &key_str).await?;
+                } else {
+                    return Err(e);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 /// POST /api/recordings/{id}/play - Start playback on a target device
 pub async fn start_playback(
     state: web::Data<AppState>,
@@ -396,9 +485,100 @@ pub async fn start_playback(
     body: web::Json<StartPlaybackRequest>,
 ) -> HttpResponse {
     let recording_id = path.into_inner();
+    let request = body.into_inner();
+    let target_device_udid = request.target_device_udid.clone();
+    let speed = if request.speed <= 0.0 { 1.0 } else { request.speed };
 
-    match state.recording_service.start_playback(recording_id, body.into_inner()).await {
-        Ok(response) => HttpResponse::Ok().json(response),
+    match state.recording_service.start_playback(recording_id, request).await {
+        Ok(response) => {
+            // Spawn background task to execute playback actions
+            let recording_service = state.recording_service.clone();
+            let app_state = state.get_ref().clone();
+            let udid = target_device_udid.clone();
+
+            // Get actions for playback
+            let actions = match recording_service.get_recording(recording_id).await {
+                Ok(recording) => recording.actions,
+                Err(e) => {
+                    tracing::error!("[PLAYBACK] Failed to get recording actions: {}", e);
+                    let _ = recording_service.stop_playback(&udid).await;
+                    return HttpResponse::InternalServerError().json(json!({
+                        "status": "error",
+                        "error": "ERR_PLAYBACK_START_FAILED",
+                        "message": format!("Failed to load actions: {}", e)
+                    }));
+                }
+            };
+
+            tokio::spawn(async move {
+                let base_delay_ms: u64 = 500;
+                let delay = std::time::Duration::from_millis(
+                    (base_delay_ms as f64 / speed as f64) as u64
+                );
+
+                tracing::info!(
+                    "[PLAYBACK] Starting execution: {} actions at {}x speed on device {}",
+                    actions.len(), speed, udid
+                );
+
+                for (index, action) in actions.iter().enumerate() {
+                    // Check playback state (pause/stop support)
+                    loop {
+                        match recording_service.get_playback_session(&udid).await {
+                            Some(session) => match session.status {
+                                PlaybackStatus::Playing => break,
+                                PlaybackStatus::Paused => {
+                                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                                    continue;
+                                }
+                                PlaybackStatus::Stopped | PlaybackStatus::Completed => {
+                                    tracing::info!("[PLAYBACK] Stopped/completed for device {}", udid);
+                                    return;
+                                }
+                            },
+                            None => {
+                                tracing::info!("[PLAYBACK] Session removed for device {}", udid);
+                                return;
+                            }
+                        }
+                    }
+
+                    // Execute the action
+                    tracing::debug!(
+                        "[PLAYBACK] Executing action {}/{}: {:?} on {}",
+                        index + 1, actions.len(), action.action_type, udid
+                    );
+
+                    if let Err(e) = execute_action_on_device(&app_state, &udid, action).await {
+                        tracing::error!(
+                            "[PLAYBACK] Action {}/{} failed on {}: {}",
+                            index + 1, actions.len(), udid, e
+                        );
+                        // Continue with remaining actions despite errors
+                    }
+
+                    // Advance progress
+                    if let Err(e) = recording_service.advance_playback(&udid).await {
+                        tracing::error!("[PLAYBACK] Failed to advance progress: {}", e);
+                    }
+
+                    // Inter-action delay (skip after last action)
+                    if index < actions.len() - 1 {
+                        tokio::time::sleep(delay).await;
+                    }
+                }
+
+                // Mark playback as completed
+                if let Err(e) = recording_service.mark_playback_complete(&udid).await {
+                    tracing::warn!("[PLAYBACK] Failed to mark complete: {}", e);
+                    // Clean up session
+                    let _ = recording_service.stop_playback(&udid).await;
+                }
+                tracing::info!("[PLAYBACK] Completed all {} actions on device {}", actions.len(), udid);
+            });
+
+            HttpResponse::Ok().json(response)
+        }
         Err(e) => {
             let (status, error_code) = if e.contains("not found") {
                 (actix_web::http::StatusCode::NOT_FOUND, "ERR_RECORDING_NOT_FOUND")

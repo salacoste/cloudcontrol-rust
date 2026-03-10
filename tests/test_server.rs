@@ -3839,3 +3839,267 @@ async fn test_download_scrcpy_recording_not_found() {
     let body: serde_json::Value = actix_web::test::read_body_json(resp).await;
     assert_eq!(body["error"], "ERR_RECORDING_NOT_FOUND");
 }
+
+// ═══════════════ PLAYBACK TESTS ═══════════════
+
+/// Helper: create a stopped recording with actions, return recording_id
+async fn create_recording_with_actions(
+    app: &impl actix_web::dev::Service<actix_http::Request, Response = actix_web::dev::ServiceResponse, Error = actix_web::Error>,
+    device_udid: &str,
+    name: &str,
+    action_count: usize,
+) -> i64 {
+    // Start recording
+    let start_req = test::TestRequest::post()
+        .uri("/api/recordings/start")
+        .set_json(json!({"device_udid": device_udid, "name": name}))
+        .to_request();
+    let start_resp = test::call_service(app, start_req).await;
+    let start_body: Value = test::read_body_json(start_resp).await;
+    let recording_id = start_body["recording_id"].as_i64().unwrap();
+
+    // Add actions
+    for i in 0..action_count {
+        let action_req = test::TestRequest::post()
+            .uri(&format!("/api/recordings/{}/action", recording_id))
+            .set_json(json!({"action_type": "tap", "x": 100 + (i as i32 * 50), "y": 200}))
+            .to_request();
+        let _resp = test::call_service(app, action_req).await;
+    }
+
+    // Stop recording
+    let stop_req = test::TestRequest::post()
+        .uri(&format!("/api/recordings/{}/stop", recording_id))
+        .set_json(json!({"name": name}))
+        .to_request();
+    let _resp = test::call_service(app, stop_req).await;
+
+    recording_id
+}
+
+#[actix_web::test]
+async fn test_playback_start_and_status() {
+    let (_tmp, state, app) = setup_test_app!();
+    insert_device(&state, "playback-test-device", true, true).await;
+
+    let recording_id = create_recording_with_actions(&app, "playback-test-device", "Playback Test", 3).await;
+
+    // Start playback
+    let play_req = test::TestRequest::post()
+        .uri(&format!("/api/recordings/{}/play", recording_id))
+        .set_json(json!({
+            "target_device_udid": "playback-test-device",
+            "speed": 1.0
+        }))
+        .to_request();
+    let play_resp = test::call_service(&app, play_req).await;
+    assert_eq!(play_resp.status(), 200);
+
+    let play_body: Value = test::read_body_json(play_resp).await;
+    assert_eq!(play_body["status"], "success");
+    assert_eq!(play_body["recording_id"], recording_id);
+    assert_eq!(play_body["total_actions"], 3);
+
+    // Check playback status
+    let status_req = test::TestRequest::get()
+        .uri(&format!("/api/recordings/{}/playback/status?target_device_udid=playback-test-device", recording_id))
+        .to_request();
+    let status_resp = test::call_service(&app, status_req).await;
+    assert_eq!(status_resp.status(), 200);
+
+    let status_body: Value = test::read_body_json(status_resp).await;
+    assert_eq!(status_body["status"], "success");
+    assert_eq!(status_body["recording_id"], recording_id);
+    assert_eq!(status_body["total_actions"], 3);
+    // Playback status should be playing or completed (background task runs concurrently)
+    let ps = status_body["playback_status"].as_str().unwrap();
+    assert!(ps == "playing" || ps == "completed", "Expected playing or completed, got: {}", ps);
+
+    // Stop playback (cleanup)
+    let stop_req = test::TestRequest::post()
+        .uri(&format!("/api/recordings/{}/playback/stop?target_device_udid=playback-test-device", recording_id))
+        .to_request();
+    let _stop_resp = test::call_service(&app, stop_req).await;
+}
+
+#[actix_web::test]
+async fn test_playback_stop() {
+    let (_tmp, state, app) = setup_test_app!();
+    insert_device(&state, "playback-stop-device", true, true).await;
+
+    let recording_id = create_recording_with_actions(&app, "playback-stop-device", "Stop Test", 5).await;
+
+    // Start playback
+    let play_req = test::TestRequest::post()
+        .uri(&format!("/api/recordings/{}/play", recording_id))
+        .set_json(json!({
+            "target_device_udid": "playback-stop-device",
+            "speed": 0.25
+        }))
+        .to_request();
+    let play_resp = test::call_service(&app, play_req).await;
+    assert_eq!(play_resp.status(), 200);
+
+    // Stop playback
+    let stop_req = test::TestRequest::post()
+        .uri(&format!("/api/recordings/{}/playback/stop?target_device_udid=playback-stop-device", recording_id))
+        .to_request();
+    let stop_resp = test::call_service(&app, stop_req).await;
+    assert_eq!(stop_resp.status(), 200);
+
+    let stop_body: Value = test::read_body_json(stop_resp).await;
+    assert_eq!(stop_body["status"], "success");
+}
+
+#[actix_web::test]
+async fn test_playback_nonexistent_recording() {
+    let (_tmp, _state, app) = setup_test_app!();
+
+    // Try to play a non-existent recording
+    let play_req = test::TestRequest::post()
+        .uri("/api/recordings/99999/play")
+        .set_json(json!({
+            "target_device_udid": "some-device",
+            "speed": 1.0
+        }))
+        .to_request();
+    let play_resp = test::call_service(&app, play_req).await;
+    assert_eq!(play_resp.status(), 404);
+
+    let play_body: Value = test::read_body_json(play_resp).await;
+    assert_eq!(play_body["error"], "ERR_RECORDING_NOT_FOUND");
+}
+
+#[actix_web::test]
+async fn test_playback_empty_recording() {
+    let (_tmp, state, app) = setup_test_app!();
+    insert_device(&state, "playback-empty-device", true, true).await;
+
+    // Create recording with no actions
+    let start_req = test::TestRequest::post()
+        .uri("/api/recordings/start")
+        .set_json(json!({"device_udid": "playback-empty-device", "name": "Empty"}))
+        .to_request();
+    let start_resp = test::call_service(&app, start_req).await;
+    let start_body: Value = test::read_body_json(start_resp).await;
+    let recording_id = start_body["recording_id"].as_i64().unwrap();
+
+    // Stop immediately (no actions recorded)
+    let stop_req = test::TestRequest::post()
+        .uri(&format!("/api/recordings/{}/stop", recording_id))
+        .set_json(json!({"name": "Empty Recording"}))
+        .to_request();
+    let _stop_resp = test::call_service(&app, stop_req).await;
+
+    // Try to play empty recording
+    let play_req = test::TestRequest::post()
+        .uri(&format!("/api/recordings/{}/play", recording_id))
+        .set_json(json!({
+            "target_device_udid": "playback-empty-device",
+            "speed": 1.0
+        }))
+        .to_request();
+    let play_resp = test::call_service(&app, play_req).await;
+    assert_eq!(play_resp.status(), 400);
+
+    let play_body: Value = test::read_body_json(play_resp).await;
+    assert_eq!(play_body["error"], "ERR_RECORDING_HAS_NO_ACTIONS");
+}
+
+#[actix_web::test]
+async fn test_playback_duplicate_start() {
+    let (_tmp, state, app) = setup_test_app!();
+    insert_device(&state, "playback-dup-device", true, true).await;
+
+    let recording_id = create_recording_with_actions(&app, "playback-dup-device", "Dup Test", 3).await;
+
+    // Start playback
+    let play_req = test::TestRequest::post()
+        .uri(&format!("/api/recordings/{}/play", recording_id))
+        .set_json(json!({
+            "target_device_udid": "playback-dup-device",
+            "speed": 0.25
+        }))
+        .to_request();
+    let play_resp = test::call_service(&app, play_req).await;
+    assert_eq!(play_resp.status(), 200);
+
+    // Try to start again on same device - should fail
+    let play_req2 = test::TestRequest::post()
+        .uri(&format!("/api/recordings/{}/play", recording_id))
+        .set_json(json!({
+            "target_device_udid": "playback-dup-device",
+            "speed": 1.0
+        }))
+        .to_request();
+    let play_resp2 = test::call_service(&app, play_req2).await;
+    assert_eq!(play_resp2.status(), 400);
+
+    let play_body2: Value = test::read_body_json(play_resp2).await;
+    assert_eq!(play_body2["error"], "ERR_PLAYBACK_ALREADY_ACTIVE");
+
+    // Cleanup
+    let stop_req = test::TestRequest::post()
+        .uri(&format!("/api/recordings/{}/playback/stop?target_device_udid=playback-dup-device", recording_id))
+        .to_request();
+    let _stop_resp = test::call_service(&app, stop_req).await;
+}
+
+#[actix_web::test]
+async fn test_playback_speed_control() {
+    let (_tmp, state, app) = setup_test_app!();
+    insert_device(&state, "playback-speed-device", true, true).await;
+
+    let recording_id = create_recording_with_actions(&app, "playback-speed-device", "Speed Test", 2).await;
+
+    // Start at 2x speed
+    let play_req = test::TestRequest::post()
+        .uri(&format!("/api/recordings/{}/play", recording_id))
+        .set_json(json!({
+            "target_device_udid": "playback-speed-device",
+            "speed": 2.0
+        }))
+        .to_request();
+    let play_resp = test::call_service(&app, play_req).await;
+    assert_eq!(play_resp.status(), 200);
+
+    let play_body: Value = test::read_body_json(play_resp).await;
+    assert_eq!(play_body["status"], "success");
+    assert!(play_body["message"].as_str().unwrap().contains("2x speed"));
+
+    // Cleanup
+    let stop_req = test::TestRequest::post()
+        .uri(&format!("/api/recordings/{}/playback/stop?target_device_udid=playback-speed-device", recording_id))
+        .to_request();
+    let _stop_resp = test::call_service(&app, stop_req).await;
+}
+
+#[actix_web::test]
+async fn test_playback_no_active_session_status() {
+    let (_tmp, _state, app) = setup_test_app!();
+
+    // Try to get status with no active playback
+    let status_req = test::TestRequest::get()
+        .uri("/api/recordings/1/playback/status?target_device_udid=no-playback-device")
+        .to_request();
+    let status_resp = test::call_service(&app, status_req).await;
+    assert_eq!(status_resp.status(), 400);
+
+    let status_body: Value = test::read_body_json(status_resp).await;
+    assert_eq!(status_body["error"], "ERR_NO_ACTIVE_PLAYBACK");
+}
+
+#[actix_web::test]
+async fn test_playback_missing_device_udid() {
+    let (_tmp, _state, app) = setup_test_app!();
+
+    // Get status without target_device_udid param
+    let status_req = test::TestRequest::get()
+        .uri("/api/recordings/1/playback/status")
+        .to_request();
+    let status_resp = test::call_service(&app, status_req).await;
+    assert_eq!(status_resp.status(), 400);
+
+    let status_body: Value = test::read_body_json(status_resp).await;
+    assert_eq!(status_body["error"], "ERR_MISSING_DEVICE_UDID");
+}

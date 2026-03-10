@@ -1,7 +1,7 @@
 # Story 4.5: Recording Playback
 
 Epic: 4 (Multi-Device Batch Operations)
-Status: ready-for-dev
+Status: done
 Story: 4-4-recording-session-management (completed)
 Priority: P2
 
@@ -52,26 +52,27 @@ Feature: Playback on cancelled recording
 
 ## Tasks/Subtasks
 
-- [ ] Task 1: Add playback execution engine
-  - [ ] Create PlaybackService with execute_playback method
-  - [ ] Create playback state tracking (current_recording, current_action_index)
-  - [ ] Add pause/resume/stop methods
+- [x] Task 1: Add playback execution engine
+  - [x] Create PlaybackService with execute_playback method
+  - [x] Create playback state tracking (current_recording, current_action_index)
+  - [x] Add pause/resume/stop methods
 
-- [ ] Task 2: Add playback API endpoint
-  - [ ] POST /api/recordings/{id}/play - Start playback
-  - [ ] GET /api/recordings/{id}/playback/status - Get playback status
+- [x] Task 2: Add playback API endpoint
+  - [x] POST /api/recordings/{id}/play - Start playback
+  - [x] GET /api/recordings/{id}/playback/status - Get playback status
 
-- [ ] Task 3: Add playback UI controls
-  - [ ] Add "Play Recording" button to recording details modal
-  - [ ] Add playback speed slider
-  - [ ] Add playback progress indicator
-  - [ ] Add "Stop Playback" button
+- [x] Task 3: Add playback UI controls
+  - [x] Add "Play Recording" button with recording selection modal
+  - [x] Add playback speed selector (0.25x - 4x)
+  - [x] Add playback progress indicator (current/total + percentage)
+  - [x] Add "Stop Playback" button
 
-- [ ] Task 4: Write E2E tests for playback
-  - [ ] Test playback executes actions in sequence
-  - [ ] Test playback speed control
-  - [ ] Test playback stop functionality
-  - [ ] Test playback progress updates
+- [x] Task 4: Write E2E tests for playback
+  - [x] Test playback start and status (test_playback_start_and_status)
+  - [x] Test playback speed control (test_playback_speed_control)
+  - [x] Test playback stop functionality (test_playback_stop)
+  - [x] Test playback progress updates (test_playback_start_and_status)
+  - [x] Test error cases: non-existent recording, empty recording, duplicate start, missing params
 
 ## Dev Notes
 

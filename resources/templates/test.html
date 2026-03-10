@@ -70,7 +70,7 @@
         var mouseMove=false
 
 
-        //按下鼠标
+        // Mouse down
         function mouseDownListener(event){
             mouseDown=true
             var e = event;
@@ -78,7 +78,7 @@
             if (window.bili_x == undefined){
                 window.bili_x=mobile_w/element.width;
                 window.bili_y=mobile_h/element.height;
-                console.log("比例尺  "+bili_x+"---"+bili_y);
+                console.log("scale ratio  "+bili_x+"---"+bili_y);
             }
             //first point
             window.downpoint_x = parseInt((e.clientX - this.offsetLeft) * bili_x);
@@ -96,7 +96,7 @@
             var uppoint_x = parseInt((e.clientX - this.offsetLeft) * bili_x);
             var uppoint_y = parseInt((e.clientY - this.offsetTop) * bili_y);
             mouseDown=false
-            //判断是否是move
+            // Check if it is a move
             if (!mouseMove&&(uppoint_x==downpoint_x)&&(uppoint_y==downpoint_y)){
                 console.log("mouseDownListener")
                 var commond="input tap "+downpoint_x+" "+downpoint_y

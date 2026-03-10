@@ -1,13 +1,13 @@
-/* ========== 设备列表页专用样式 ========== */
+/* ========== Device List Page Styles ========== */
 
-/* 设备网格布局 */
+/* Device Grid Layout */
 .row {
   display: flex;
   flex-wrap: wrap;
   margin: 0 -10px;
 }
 
-/* 设备卡片容器 */
+/* Device Card Container */
 .device {
   width: 200px;
   height: auto;
@@ -15,7 +15,7 @@
   margin-bottom: 10px;
 }
 
-/* 设备卡片 */
+/* Device Card */
 .box_phone {
   background: #fff;
   border-radius: 16px;
@@ -32,7 +32,7 @@
   border-color: #4a90d9;
 }
 
-/* IP标签 */
+/* IP Label */
 .lable_font {
   display: flex;
   align-items: center;
@@ -50,7 +50,7 @@
   margin-right: 8px;
 }
 
-/* 手机截图 */
+/* Phone Screenshot */
 .box_phone a {
   display: block;
   text-align: center;
@@ -71,7 +71,7 @@
   transform: scale(1.02);
 }
 
-/* 悬浮操作按钮 */
+/* Floating Action Buttons */
 .posti {
   position: absolute;
   left: 50%;
@@ -111,12 +111,12 @@
   transform: scale(1.05);
 }
 
-/* 阴影效果 */
+/* Shadow Effect */
 .shadow {
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
 }
 
-/* 搜索工具栏 */
+/* Search Toolbar */
 .btn_i {
   padding: 6px 12px;
   height: 36px;
@@ -132,14 +132,14 @@
   border-radius: 8px;
 }
 
-/* 统计徽章 */
+/* Stats Badge */
 .input-group-addon strong {
   font-size: 16px;
   color: #4a90d9;
   margin-left: 4px;
 }
 
-/* 在线/离线指示器 */
+/* Online/Offline Indicator */
 .input-group-addon .fa-meh-o {
   color: #28a745;
 }
@@ -148,7 +148,7 @@
   color: #6c757d;
 }
 
-/* 空状态提示 */
+/* Empty State Message */
 .empty-state {
   text-align: center;
   padding: 60px 20px;
@@ -161,7 +161,7 @@
   opacity: 0.5;
 }
 
-/* 响应式调整 */
+/* Responsive Adjustments */
 @media (max-width: 768px) {
   .device {
     width: 50%;

@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>500 - 服务器错误 | CloudControl</title>
+  <title>500 - Server Error | CloudControl</title>
   <link rel="stylesheet" href="/static/css/terminal-theme.css">
   <style>
     .term-error-page {
@@ -170,10 +170,10 @@
 
     <div class="term-error-message">
       <span class="term-prompt">root@cloudcontrol</span>:<span style="color: var(--term-blue);">~</span>$ systemctl status<br>
-      <span class="term-critical">[CRITICAL]</span> 服务器遇到了意外情况<br>
-      <span class="term-critical">[CRITICAL]</span> 无法完成当前请求<br>
+      <span class="term-critical">[CRITICAL]</span> The server encountered an unexpected error<br>
+      <span class="term-critical">[CRITICAL]</span> Unable to complete the current request<br>
       <br>
-      <span style="color: var(--term-gray);">// 请稍后重试或联系管理员</span>
+      <span style="color: var(--term-gray);">// Please try again later or contact an administrator</span>
     </div>
 
     {% if text or body %}

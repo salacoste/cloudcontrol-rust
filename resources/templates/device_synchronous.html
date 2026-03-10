@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>CloudControl - 群控中心</title>
+    <title>CloudControl - Batch Control Center</title>
     <link rel="stylesheet" href="/static/css/terminal-theme.css">
     <link rel="stylesheet" href="/static/dropzone/dropzone.min.css">
     <style>
@@ -98,7 +98,7 @@
             border-right: 1px solid var(--term-border);
         }
 
-        /* 性能监控面板 */
+        /* Performance Monitor Panel */
         .gc-perf-panel {
             height: 180px;
             min-height: 120px;
@@ -195,7 +195,7 @@
             margin-left: 2px;
         }
 
-        /* 设备性能列表 */
+        /* Device Performance List */
         .gc-perf-devices {
             margin-top: 8px;
         }
@@ -557,7 +557,7 @@
             border-color: var(--term-green);
         }
 
-        /* 文本输入区样式 */
+        /* Text Input Area Styles */
         .gc-input-bar {
             display: flex;
             gap: 8px;
@@ -607,7 +607,7 @@
             height: 18px;
         }
 
-        /* 目标选择器样式 */
+        /* Target Selector Styles */
         .gc-target-selector {
             display: flex;
             align-items: center;
@@ -658,7 +658,7 @@
             text-align: right;
         }
 
-        /* 快捷短语面板 */
+        /* Quick Phrases Panel */
         .gc-phrases-panel {
             width: 280px;
             min-width: 200px;
@@ -979,14 +979,14 @@
         </div>
 
         <div class="gc-navbar-actions">
-            <button class="term-btn term-btn-secondary" @click="refreshAll" title="刷新所有设备">
+            <button class="term-btn term-btn-secondary" @click="refreshAll" title="Refresh All Devices">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="M23 4v6h-6M1 20v-6h6"/>
                     <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
                 </svg>
                 REFRESH
             </button>
-            <a href="/" class="term-btn term-btn-ghost" title="返回首页">
+            <a href="/" class="term-btn term-btn-ghost" title="Return to Home">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
                 </svg>
@@ -1027,34 +1027,34 @@
                 <span class="gc-finger finger-1"></span>
             </section>
 
-            <!-- 目标选择器 -->
+            <!-- Target Selector -->
             <div class="gc-target-selector">
                 <span class="gc-target-label">TARGET:</span>
                 <div class="gc-target-toggle">
-                    <button class="gc-target-btn" :class="{active: targetMode === 'all'}" @click="targetMode = 'all'" title="发送到所有设备">
+                    <button class="gc-target-btn" :class="{active: targetMode === 'all'}" @click="targetMode = 'all'" title="Send to All Devices">
                         ALL
                     </button>
-                    <button class="gc-target-btn" :class="{active: targetMode === 'master'}" @click="targetMode = 'master'" title="仅发送到主控设备">
+                    <button class="gc-target-btn" :class="{active: targetMode === 'master'}" @click="targetMode = 'master'" title="Send to Master Device Only">
                         MASTER
                     </button>
-                    <button class="gc-target-btn" :class="{active: targetMode === 'selected'}" @click="targetMode = 'selected'" title="发送到选中的设备">
+                    <button class="gc-target-btn" :class="{active: targetMode === 'selected'}" @click="targetMode = 'selected'" title="Send to Selected Devices">
                         SELECTED
                     </button>
                 </div>
                 <span class="gc-target-info">
-                    {{ targetMode === 'all' ? '→ 所有设备 (' + deviceList.length + ')' : targetMode === 'master' ? '→ ' + (deviceList[masterIndex] ? deviceList[masterIndex].model || deviceList[masterIndex].udid : '') : '→ 选中设备 (' + (selectedDevice !== null ? 1 : 0) + ')' }}
+                    {{ targetMode === 'all' ? '→ All Devices (' + deviceList.length + ')' : targetMode === 'master' ? '→ ' + (deviceList[masterIndex] ? deviceList[masterIndex].model || deviceList[masterIndex].udid : '') : '→ Selected Devices (' + (selectedDevice !== null ? 1 : 0) + ')' }}
                 </span>
             </div>
 
             <div class="gc-control-bar">
-                <button class="gc-control-btn danger" @click="keyevent('power')" title="电源键">
+                <button class="gc-control-btn danger" @click="keyevent('power')" title="Power Key">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <path d="M18.36 6.64a9 9 0 1 1-12.73 0"/>
                         <line x1="12" y1="2" x2="12" y2="12"/>
                     </svg>
                     <span>PWR</span>
                 </button>
-                <button class="gc-control-btn" @click="keyevent('menu')" title="菜单键">
+                <button class="gc-control-btn" @click="keyevent('menu')" title="Menu Key">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <line x1="3" y1="12" x2="21" y2="12"/>
                         <line x1="3" y1="6" x2="21" y2="6"/>
@@ -1062,13 +1062,13 @@
                     </svg>
                     <span>MENU</span>
                 </button>
-                <button class="gc-control-btn" @click="keyevent('home')" title="Home键">
+                <button class="gc-control-btn" @click="keyevent('home')" title="Home Key">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
                     </svg>
                     <span>HOME</span>
                 </button>
-                <button class="gc-control-btn" @click="keyevent('back')" title="返回键">
+                <button class="gc-control-btn" @click="keyevent('back')" title="Back Key">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <line x1="19" y1="12" x2="5" y2="12"/>
                         <polyline points="12 19 5 12 12 5"/>
@@ -1077,21 +1077,21 @@
                 </button>
             </div>
 
-            <!-- 文本输入区 -->
+            <!-- Text Input Area -->
             <div class="gc-input-bar">
                 <input type="text"
                        class="gc-text-input"
                        v-model="inputText"
                        @keyup.enter="sendText"
-                       :placeholder="'输入文本，按 Enter 发送到' + (targetMode === 'all' ? '所有设备' : targetMode === 'master' ? '主控设备' : '选中设备') + '...'"
-                       title="支持中文输入">
-                <button class="gc-input-btn" @click="sendText" title="发送文本">
+                       :placeholder="'Type text, press Enter to send to ' + (targetMode === 'all' ? 'All Devices' : targetMode === 'master' ? 'Master Device' : 'Selected Devices') + '...'"
+                       title="Supports text input">
+                <button class="gc-input-btn" @click="sendText" title="Send Text">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <line x1="22" y1="2" x2="11" y2="13"/>
                         <polygon points="22 2 15 22 11 13 2 9 22 2"/>
                     </svg>
                 </button>
-                <button class="gc-input-btn" @click="clearText" title="清空 (发送删除键)">
+                <button class="gc-input-btn" @click="clearText" title="Clear (Send Delete Keys)">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <path d="M21 4H8l-7 8 7 8h13a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2z"/>
                         <line x1="18" y1="9" x2="12" y2="15"/>
@@ -1100,7 +1100,7 @@
                 </button>
             </div>
 
-            <!-- 性能监控面板 -->
+            <!-- Performance Monitor Panel -->
             <div class="gc-perf-panel">
                 <div class="gc-perf-header">
                     <div class="gc-perf-title">
@@ -1110,13 +1110,13 @@
                         PERFORMANCE
                     </div>
                     <div style="display: flex; align-items: center; gap: 8px;">
-                        <!-- 画质选择 -->
+                        <!-- Quality Selection -->
                         <select v-model="streamQuality" @change="applyQualitySettings"
                             style="background: var(--term-bg); color: var(--term-green); border: 1px solid var(--term-border);
                                    padding: 2px 6px; font-size: 0.65rem; border-radius: 3px; cursor: pointer;">
-                            <option value="performance">流畅</option>
-                            <option value="standard">标准</option>
-                            <option value="hd">高清</option>
+                            <option value="performance">Smooth</option>
+                            <option value="standard">Standard</option>
+                            <option value="hd">HD</option>
                         </select>
                         <span style="font-size: 0.65rem; color: var(--term-text-dim);">
                             FPS: <span style="color: var(--term-cyan);">{{ perfStats.fps }}</span>
@@ -1124,11 +1124,11 @@
                     </div>
                 </div>
                 <div class="gc-perf-content">
-                    <!-- 总体性能指标 -->
+                    <!-- Overall Performance Metrics -->
                     <div class="gc-perf-grid">
                         <div class="gc-perf-card">
                             <div class="gc-perf-card-header">
-                                <span class="gc-perf-card-title">截图延迟</span>
+                                <span class="gc-perf-card-title">Screenshot Latency</span>
                                 <span class="gc-perf-card-status" :class="perfStats.screenshot > 500 ? 'error' : perfStats.screenshot > 200 ? 'warning' : ''"></span>
                             </div>
                             <div class="gc-perf-card-value" :class="perfStats.screenshot > 500 ? 'error' : perfStats.screenshot > 200 ? 'warning' : ''">
@@ -1137,7 +1137,7 @@
                         </div>
                         <div class="gc-perf-card">
                             <div class="gc-perf-card-header">
-                                <span class="gc-perf-card-title">指令延迟</span>
+                                <span class="gc-perf-card-title">Command Latency</span>
                                 <span class="gc-perf-card-status" :class="perfStats.command > 100 ? 'error' : perfStats.command > 50 ? 'warning' : ''"></span>
                             </div>
                             <div class="gc-perf-card-value" :class="perfStats.command > 100 ? 'error' : perfStats.command > 50 ? 'warning' : ''">
@@ -1146,10 +1146,10 @@
                         </div>
                     </div>
 
-                    <!-- 截图管线计时瀑布图 -->
+                    <!-- Screenshot Pipeline Timing Waterfall -->
                     <div v-if="timingWaterfall.total > 0" style="margin: 8px 0; padding: 8px; background: rgba(0,0,0,0.3); border-radius: 4px; font-family: var(--term-font); font-size: 0.65rem;">
                         <div style="color: var(--term-text-dim); margin-bottom: 6px;">
-                            截图管线 ({{ timingWaterfall.source || 'device' }}) — {{ timingWaterfall.raw_size }} → {{ timingWaterfall.scaled_size }}  {{ timingWaterfall.jpeg_kb }}KB
+                            Screenshot Pipeline ({{ timingWaterfall.source || 'device' }}) — {{ timingWaterfall.raw_size }} → {{ timingWaterfall.scaled_size }}  {{ timingWaterfall.jpeg_kb }}KB
                         </div>
                         <div v-for="bar in timingBars" :key="bar.label" style="display: flex; align-items: center; margin: 2px 0; height: 14px;">
                             <span style="width: 70px; color: var(--term-text-dim); text-align: right; padding-right: 6px;">{{ bar.label }}</span>
@@ -1166,7 +1166,7 @@
                         </div>
                     </div>
 
-                    <!-- 各设备性能 -->
+                    <!-- Per-Device Performance -->
                     <div class="gc-perf-devices">
                         <div v-for="(perf, index) in devicePerfList" :key="index" class="gc-perf-device-row">
                             <span class="gc-perf-device-name">{{ perf.name }}</span>
@@ -1201,7 +1201,7 @@
                     <span class="gc-devices-count">// {{ deviceList.length - 1 }} connected</span>
                 </div>
                 <div class="gc-view-toggle">
-                    <button class="gc-view-btn" :class="{active: viewMode === 'compact'}" @click="viewMode = 'compact'" title="紧凑视图">
+                    <button class="gc-view-btn" :class="{active: viewMode === 'compact'}" @click="viewMode = 'compact'" title="Compact View">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <rect x="3" y="3" width="7" height="7"/>
                             <rect x="14" y="3" width="7" height="7"/>
@@ -1209,7 +1209,7 @@
                             <rect x="3" y="14" width="7" height="7"/>
                         </svg>
                     </button>
-                    <button class="gc-view-btn" :class="{active: viewMode === 'normal'}" @click="viewMode = 'normal'" title="标准视图">
+                    <button class="gc-view-btn" :class="{active: viewMode === 'normal'}" @click="viewMode = 'normal'" title="Standard View">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <rect x="3" y="3" width="8" height="10"/>
                             <rect x="13" y="3" width="8" height="10"/>
@@ -1217,7 +1217,7 @@
                             <rect x="13" y="15" width="8" height="6"/>
                         </svg>
                     </button>
-                    <button class="gc-view-btn" :class="{active: viewMode === 'large'}" @click="viewMode = 'large'" title="大图视图">
+                    <button class="gc-view-btn" :class="{active: viewMode === 'large'}" @click="viewMode = 'large'" title="Large View">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
                         </svg>
@@ -1242,7 +1242,7 @@
                             <div class="gc-device-actions">
                                 <button class="gc-device-action-btn gc-set-master-btn"
                                         @click.stop="switchMaster(index)"
-                                        :title="index === masterIndex ? '当前主控' : '设为主控'"
+                                        :title="index === masterIndex ? 'Current Master' : 'Set as Master'"
                                         :class="{active: index === masterIndex}">
                                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                         <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/>
@@ -1250,14 +1250,14 @@
                                         <line x1="12" y1="17" x2="12" y2="21"/>
                                     </svg>
                                 </button>
-                                <a :href="device.remote" class="gc-device-action-btn" title="单独控制">
+                                <a :href="device.remote" class="gc-device-action-btn" title="Individual Control">
                                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                         <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
                                         <polyline points="15 3 21 3 21 9"/>
                                         <line x1="10" y1="14" x2="21" y2="3"/>
                                     </svg>
                                 </a>
-                                <button class="gc-device-action-btn" @click.stop="refreshDevice(index)" title="刷新截图">
+                                <button class="gc-device-action-btn" @click.stop="refreshDevice(index)" title="Refresh Screenshot">
                                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                         <path d="M23 4v6h-6M1 20v-6h6"/>
                                         <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
@@ -1293,7 +1293,7 @@
                     </svg>
                     <span>QUICK_PHRASES</span>
                 </div>
-                <button class="gc-phrases-toggle" @click="phrasesCollapsed = !phrasesCollapsed" :title="phrasesCollapsed ? '展开' : '收起'">
+                <button class="gc-phrases-toggle" @click="phrasesCollapsed = !phrasesCollapsed" :title="phrasesCollapsed ? 'Expand' : 'Collapse'">
                     <svg v-if="phrasesCollapsed" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <polyline points="15 18 9 12 15 6"/>
                     </svg>
@@ -1310,8 +1310,8 @@
                            class="gc-phrase-input"
                            v-model="newPhrase"
                            @keyup.enter="addPhrase"
-                           placeholder="添加常用短语...">
-                    <button class="gc-phrase-add-btn" @click="addPhrase" title="添加">+</button>
+                           placeholder="Add common phrases...">
+                    <button class="gc-phrase-add-btn" @click="addPhrase" title="Add">+</button>
                 </div>
 
                 <!-- Phrases list -->
@@ -1319,19 +1319,19 @@
                     <div v-for="(phrase, index) in phrases" :key="index" class="gc-phrase-item">
                         <div class="gc-phrase-text">{{ phrase }}</div>
                         <div class="gc-phrase-actions">
-                            <button class="gc-phrase-btn primary" @click="sendPhrase(phrase)" title="发送到目标设备">
-                                发送
+                            <button class="gc-phrase-btn primary" @click="sendPhrase(phrase)" title="Send to target devices">
+                                Send
                             </button>
-                            <button class="gc-phrase-btn" @click="sendPhraseToAll(phrase)" title="发送到所有设备">
-                                全部
+                            <button class="gc-phrase-btn" @click="sendPhraseToAll(phrase)" title="Send to All Devices">
+                                All
                             </button>
-                            <button class="gc-phrase-btn" @click="copyPhrase(phrase)" title="复制到剪贴板">
-                                复制
+                            <button class="gc-phrase-btn" @click="copyPhrase(phrase)" title="Copy to clipboard">
+                                Copy
                             </button>
-                            <button class="gc-phrase-btn" @click="fillPhrase(phrase)" title="填入输入框">
-                                填入
+                            <button class="gc-phrase-btn" @click="fillPhrase(phrase)" title="Fill in input field">
+                                Fill
                             </button>
-                            <button class="gc-phrase-btn danger" @click="removePhrase(index)" title="删除">
+                            <button class="gc-phrase-btn danger" @click="removePhrase(index)" title="Delete">
                                 ×
                             </button>
                         </div>
@@ -1340,14 +1340,14 @@
 
                 <!-- Empty state -->
                 <div v-else class="gc-phrases-empty">
-                    <div style="margin-bottom: 8px;">// 暂无保存的短语</div>
-                    <div style="font-size: 0.7rem;">添加常用文本以便快速发送</div>
+                    <div style="margin-bottom: 8px;">// No saved phrases yet</div>
+                    <div style="font-size: 0.7rem;">Add common text for quick sending</div>
                 </div>
             </div>
 
             <div class="gc-phrases-footer">
-                <span class="gc-phrases-count">{{ phrases.length }} 条短语</span>
-                <button class="gc-phrases-clear" @click="clearAllPhrases" v-if="phrases.length > 0">清空全部</button>
+                <span class="gc-phrases-count">{{ phrases.length }} phrases</span>
+                <button class="gc-phrases-clear" @click="clearAllPhrases" v-if="phrases.length > 0">Clear All</button>
             </div>
         </div>
     </div>
@@ -1363,7 +1363,7 @@
 <script src='/static/js/common.js'></script>
 
 <script>
-    // 服务端传入数据
+    // Server-provided data
     var deviceList = {{ list | safe }};
     var deviceIp = "{{ IP }}";
     var devicePort = "{{ Port }}";
@@ -1386,7 +1386,7 @@ window.app = new Vue({
         deviceInfo: {},
         viewMode: 'normal',
         selectedDevice: null,
-        masterIndex: 0,  // 当前主控设备索引
+        masterIndex: 0,  // Current master device index
         control: null,
         control_list: [],
         canvas: {
@@ -1406,20 +1406,20 @@ window.app = new Vue({
         imageBlobBuffer: [],
         rotation: 0,
         cursor: {},
-        inputText: '',  // 文本输入框内容
-        targetMode: 'master',  // 目标模式: 'all', 'master', 'selected'
-        // 快捷短语
+        inputText: '',  // Text input field content
+        targetMode: 'master',  // Target mode: 'all', 'master', 'selected'
+        // Quick phrases
         phrases: [],
         newPhrase: '',
         phrasesCollapsed: false,
-        // 画质设置
+        // Quality settings
         streamQuality: 'standard',  // 'performance', 'standard', 'hd'
         qualitySettings: {
-            performance: { q: 40, s: 0.4 },  // 流畅模式：低延迟
-            standard: { q: 60, s: 0.6 },     // 标准模式：平衡
-            hd: { q: 80, s: 0.8 }            // 高清模式：高画质
+            performance: { q: 40, s: 0.4 },  // Smooth mode: low latency
+            standard: { q: 60, s: 0.6 },     // Standard mode: balanced
+            hd: { q: 80, s: 0.8 }            // HD mode: high quality
         },
-        // 性能监控
+        // Performance monitoring
         perfStats: {
             fps: 0,
             screenshot: 0,
@@ -1430,7 +1430,7 @@ window.app = new Vue({
             screenshots: [],
             commands: []
         },
-        // 计时瀑布图数据
+        // Timing waterfall data
         timingWaterfall: {
             capture: 0,
             resize: 0,
@@ -1467,7 +1467,7 @@ window.app = new Vue({
     mounted: function() {
         var self = this;
 
-        // 初始化设备列表 - 使用后端代理 API 获取截图
+        // Initialize device list - use backend proxy API to get screenshots
         for (var i = 0; i < deviceList.length; i++) {
             this.deviceList.push({
                 src: "/inspector/" + deviceList[i]["udid"] + "/screenshot/img?t=" + Date.now(),
@@ -1477,25 +1477,25 @@ window.app = new Vue({
                 status: 'online',
                 battery: Math.floor(Math.random() * 40) + 60,
                 model: deviceList[i]["model"] || '',
-                // 保存实际设备分辨率 (用于坐标映射)
+                // Save actual device resolution (for coordinate mapping)
                 width: deviceList[i]["width"] || 1080,
                 height: deviceList[i]["height"] || 1920
             });
         }
 
-        // 初始化 canvas
+        // Initialize canvas
         this.canvas.bg = document.getElementById('bgCanvas0');
         this.canvas.fg = document.getElementById('fgCanvas');
 
-        // 窗口大小调整
+        // Window resize handler
         $(window).resize(function() {
             self.resizeScreen();
         });
 
-        // 初始化拖拽分隔条
+        // Initialize drag resizer
         this.initResizer();
 
-        // 获取设备信息
+        // Get device info
         $.ajax({
             url: this.deviceUrl + "/info",
             dataType: "json"
@@ -1504,47 +1504,47 @@ window.app = new Vue({
             document.title = 'CloudControl - ' + ret.model;
         });
 
-        // 启动屏幕流和触摸控制
+        // Start screen stream and touch control
         this.enableTouch();
         this.openScreenStream();
 
-        // 唤醒设备
+        // Wake up device
         setTimeout(function() {
             self.keyevent("WAKEUP");
         }, 100);
 
-        // 定时刷新从设备截图
+        // Auto-refresh slave device screenshots
         this.startAutoRefresh();
 
-        // 更新同步延迟显示
+        // Update sync latency display
         this.updateLatencyDisplay();
 
-        // 加载保存的画质设置
+        // Load saved quality settings
         var savedQuality = localStorage.getItem('gc_stream_quality');
         if (savedQuality && this.qualitySettings[savedQuality]) {
             this.streamQuality = savedQuality;
         }
 
-        // 加载保存的快捷短语
+        // Load saved quick phrases
         this.loadPhrases();
 
-        // 初始化设备性能列表
+        // Initialize device performance list
         this.initDevicePerfList();
     },
     methods: {
-        // 应用画质设置
+        // Apply quality settings
         applyQualitySettings: function() {
-            // 保存到 localStorage
+            // Save to localStorage
             localStorage.setItem('gc_stream_quality', this.streamQuality);
-            console.log('[QUALITY] 切换画质模式:', this.streamQuality, this.qualitySettings[this.streamQuality]);
+            console.log('[QUALITY] Switched quality mode:', this.streamQuality, this.qualitySettings[this.streamQuality]);
         },
 
-        // 获取当前画质参数
+        // Get current quality parameters
         getQualityParams: function() {
             return this.qualitySettings[this.streamQuality] || this.qualitySettings.standard;
         },
 
-        // 初始化设备性能列表
+        // Initialize device performance list
         initDevicePerfList: function() {
             var self = this;
             this.devicePerfList = [];
@@ -1560,14 +1560,14 @@ window.app = new Vue({
             }
         },
 
-        // 更新设备命令性能
+        // Update device command performance
         updateDevicePerf: function(udid, latency, success) {
             for (var i = 0; i < this.devicePerfList.length; i++) {
                 if (this.devicePerfList[i].udid === udid) {
                     var perf = this.devicePerfList[i];
                     perf.totalCmds++;
                     if (success) perf.successCmds++;
-                    // 移动平均
+                    // Moving average
                     perf.cmdLatency = Math.round(perf.cmdLatency * 0.7 + latency * 0.3);
                     perf.successRate = Math.round((perf.successCmds / perf.totalCmds) * 100);
                     break;
@@ -1575,22 +1575,22 @@ window.app = new Vue({
             }
         },
 
-        // 更新截图性能
+        // Update screenshot performance
         updateScreenshotPerf: function(latency) {
             this.perfHistory.screenshots.push(latency);
             if (this.perfHistory.screenshots.length > 30) {
                 this.perfHistory.screenshots.shift();
             }
-            // 计算平均延迟
+            // Calculate average latency
             var sum = this.perfHistory.screenshots.reduce(function(a, b) { return a + b; }, 0);
             this.perfStats.screenshot = Math.round(sum / this.perfHistory.screenshots.length);
-            // 计算 FPS
+            // Calculate FPS
             if (this.perfStats.screenshot > 0) {
                 this.perfStats.fps = Math.min(60, Math.round(1000 / this.perfStats.screenshot));
             }
         },
 
-        // 更新命令性能
+        // Update command performance
         updateCommandPerf: function(latency) {
             this.perfHistory.commands.push(latency);
             if (this.perfHistory.commands.length > 30) {
@@ -1599,7 +1599,7 @@ window.app = new Vue({
             var sum = this.perfHistory.commands.reduce(function(a, b) { return a + b; }, 0);
             this.perfStats.command = Math.round(sum / this.perfHistory.commands.length);
         },
-        // 获取目标设备列表
+        // Get target device list
         getTargetDevices: function() {
             if (this.targetMode === 'all') {
                 return deviceList;
@@ -1609,7 +1609,7 @@ window.app = new Vue({
                 if (this.selectedDevice !== null && deviceList[this.selectedDevice]) {
                     return [deviceList[this.selectedDevice]];
                 }
-                // 如果没有选中设备，使用主控设备
+                // If no device selected, use master device
                 return deviceList[this.masterIndex] ? [deviceList[this.masterIndex]] : [];
             }
             return deviceList;
@@ -1626,28 +1626,28 @@ window.app = new Vue({
             this.selectedDevice = this.selectedDevice === index ? null : index;
         },
 
-        // 切换主控设备
+        // Switch master device
         switchMaster: function(index) {
             if (index === this.masterIndex || index < 0 || index >= this.deviceList.length) {
                 return;
             }
 
-            console.log('[GROUP] 切换主控设备: ' + this.deviceList[this.masterIndex].udid + ' -> ' + this.deviceList[index].udid);
+            console.log('[GROUP] Switching master device: ' + this.deviceList[this.masterIndex].udid + ' -> ' + this.deviceList[index].udid);
 
-            // 更新主控索引
+            // Update master index
             this.masterIndex = index;
             this.deviceUdid = this.deviceList[index].udid;
 
-            // 关闭当前屏幕流
+            // Close current screen stream
             if (this.screenWS) {
                 this.screenWS.close();
                 this.screenWS = null;
             }
 
-            // 启动新设备的屏幕流
+            // Start screen stream for new device
             this.openScreenStream();
 
-            // 更新显示
+            // Update display
             this.$forceUpdate();
         },
 
@@ -1727,7 +1727,7 @@ window.app = new Vue({
             var self = this;
             var targets = this.getTargetDevices();
             console.log('[KEYEVENT] Sending', meta, 'to', targets.length, 'device(s)');
-            // 发送按键事件到目标设备
+            // Send key event to target devices
             for (var i = 0; i < targets.length; i++) {
                 $.ajax({
                     url: '/inspector/' + targets[i].udid + '/keyevent',
@@ -1739,7 +1739,7 @@ window.app = new Vue({
         },
 
         shell: function(command) {
-            // 发送shell命令到目标设备
+            // Send shell command to target devices
             var targets = this.getTargetDevices();
             var results = [];
             for (var i = 0; i < targets.length; i++) {
@@ -1753,7 +1753,7 @@ window.app = new Vue({
             return $.when.apply($, results);
         },
 
-        // 发送文本到目标设备
+        // Send text to target devices
         sendText: function() {
             var text = this.inputText.trim();
             if (!text) return;
@@ -1761,7 +1761,7 @@ window.app = new Vue({
             var targets = this.getTargetDevices();
             console.log('[INPUT] Sending text to', targets.length, 'device(s):', text);
 
-            // 发送到目标设备
+            // Send to target devices
             for (var i = 0; i < targets.length; i++) {
                 fetch('/inspector/' + targets[i].udid + '/input', {
                     method: 'POST',
@@ -1776,21 +1776,21 @@ window.app = new Vue({
                 });
             }
 
-            // 清空输入框
+            // Clear input field
             this.inputText = '';
         },
 
-        // 清空文本 (发送删除键清除当前输入)
+        // Clear text (send delete keys to clear current input)
         clearText: function() {
-            // 发送多个删除键来清除设备上的输入
+            // Send multiple delete keys to clear input on device
             for (var i = 0; i < 50; i++) {
                 this.keyevent('DEL');
             }
         },
 
-        // ===== 快捷短语功能 =====
+        // ===== Quick Phrases Feature =====
 
-        // 从 localStorage 加载短语
+        // Load phrases from localStorage
         loadPhrases: function() {
             try {
                 var saved = localStorage.getItem('cloudcontrol_phrases');
@@ -1798,20 +1798,20 @@ window.app = new Vue({
                     this.phrases = JSON.parse(saved);
                 }
             } catch (e) {
-                console.error('[PHRASES] 加载失败:', e);
+                console.error('[PHRASES] Load failed:', e);
             }
         },
 
-        // 保存短语到 localStorage
+        // Save phrases to localStorage
         savePhrases: function() {
             try {
                 localStorage.setItem('cloudcontrol_phrases', JSON.stringify(this.phrases));
             } catch (e) {
-                console.error('[PHRASES] 保存失败:', e);
+                console.error('[PHRASES] Save failed:', e);
             }
         },
 
-        // 添加新短语
+        // Add new phrase
         addPhrase: function() {
             var text = this.newPhrase.trim();
             if (!text) return;
@@ -1822,24 +1822,24 @@ window.app = new Vue({
             this.newPhrase = '';
         },
 
-        // 删除短语
+        // Remove phrase
         removePhrase: function(index) {
             this.phrases.splice(index, 1);
             this.savePhrases();
         },
 
-        // 清空所有短语
+        // Clear all phrases
         clearAllPhrases: function() {
-            if (confirm('确定要清空所有保存的短语吗？')) {
+            if (confirm('Are you sure you want to clear all saved phrases?')) {
                 this.phrases = [];
                 this.savePhrases();
             }
         },
 
-        // 发送短语到目标设备
+        // Send phrase to target devices
         sendPhrase: function(text) {
             var targets = this.getTargetDevices();
-            console.log('[PHRASES] 发送到', targets.length, '台设备:', text);
+            console.log('[PHRASES] Sending to', targets.length, 'device(s):', text);
             for (var i = 0; i < targets.length; i++) {
                 fetch('/inspector/' + targets[i].udid + '/input', {
                     method: 'POST',
@@ -1849,9 +1849,9 @@ window.app = new Vue({
             }
         },
 
-        // 发送短语到所有设备
+        // Send phrase to all devices
         sendPhraseToAll: function(text) {
-            console.log('[PHRASES] 发送到所有设备:', text);
+            console.log('[PHRASES] Sending to all devices:', text);
             for (var i = 0; i < deviceList.length; i++) {
                 fetch('/inspector/' + deviceList[i].udid + '/input', {
                     method: 'POST',
@@ -1861,15 +1861,15 @@ window.app = new Vue({
             }
         },
 
-        // 复制短语到剪贴板
+        // Copy phrase to clipboard
         copyPhrase: function(text) {
             var self = this;
             if (navigator.clipboard) {
                 navigator.clipboard.writeText(text).then(function() {
-                    console.log('[PHRASES] 已复制:', text);
+                    console.log('[PHRASES] Copied:', text);
                 });
             } else {
-                // 降级方案
+                // Fallback
                 var textarea = document.createElement('textarea');
                 textarea.value = text;
                 document.body.appendChild(textarea);
@@ -1879,7 +1879,7 @@ window.app = new Vue({
             }
         },
 
-        // 填入输入框
+        // Fill in input field
         fillPhrase: function(text) {
             this.inputText = text;
         },
@@ -1919,19 +1919,19 @@ window.app = new Vue({
             var ctx = canvas.getContext('2d', { alpha: false, desynchronized: true });
             var running = true;
 
-            // 性能监控
+            // Performance monitoring
             var frameCount = 0;
             var lastFpsTime = performance.now();
             var currentFps = 0;
-            var adaptiveDelay = 16; // 初始目标 60fps
+            var adaptiveDelay = 16; // Initial target 60fps
 
-            // 双缓冲: 预加载下一帧
+            // Double buffering: preload next frame
             var frameBuffer = [];
             var maxBufferSize = 3;
             var isRendering = false;
             var isFetching = false;
 
-            // 使用后端代理 API
+            // Use backend proxy API
             this.screenWS = {
                 close: function() {
                     running = false;
@@ -1939,7 +1939,7 @@ window.app = new Vue({
                 }
             };
 
-            // 高性能图像解码 (使用 createImageBitmap)
+            // High-performance image decoding (using createImageBitmap)
             function decodeImage(blob) {
                 if (typeof createImageBitmap !== 'undefined') {
                     return createImageBitmap(blob, {
@@ -1947,7 +1947,7 @@ window.app = new Vue({
                         colorSpaceConversion: 'none'
                     });
                 }
-                // 降级方案
+                // Fallback
                 return new Promise(function(resolve, reject) {
                     var img = new Image();
                     var url = URL.createObjectURL(blob);
@@ -1963,7 +1963,7 @@ window.app = new Vue({
                 });
             }
 
-            // 渲染帧 (使用 requestAnimationFrame 同步)
+            // Render frame (sync with requestAnimationFrame)
             function renderFrame() {
                 if (!running) return;
 
@@ -1974,7 +1974,7 @@ window.app = new Vue({
                     requestAnimationFrame(function() {
                         if (!running) { isRendering = false; return; }
 
-                        // 只在尺寸变化时调整 canvas
+                        // Only resize canvas when dimensions change
                         if (canvas.width !== frame.width || canvas.height !== frame.height) {
                             canvas.width = frame.width;
                             canvas.height = frame.height;
@@ -1983,17 +1983,17 @@ window.app = new Vue({
                         ctx.drawImage(frame, 0, 0);
                         self.resizeScreen(frame);
 
-                        // 释放 ImageBitmap
+                        // Release ImageBitmap
                         if (frame.close) frame.close();
 
-                        // 更新 FPS
+                        // Update FPS
                         frameCount++;
                         var now = performance.now();
                         if (now - lastFpsTime >= 1000) {
                             currentFps = frameCount;
                             frameCount = 0;
                             lastFpsTime = now;
-                            // 自适应帧率
+                            // Adaptive frame rate
                             if (currentFps < 15) {
                                 adaptiveDelay = Math.min(100, adaptiveDelay + 10);
                             } else if (currentFps > 25 && adaptiveDelay > 16) {
@@ -2006,11 +2006,11 @@ window.app = new Vue({
                 }
 
                 if (running) {
-                    setTimeout(renderFrame, 8); // 120Hz 渲染检查
+                    setTimeout(renderFrame, 8); // 120Hz render check
                 }
             }
 
-            // 获取截图 (流水线方式，使用二进制端点)
+            // Fetch screenshot (pipeline mode, using binary endpoint)
             function fetchScreenshot() {
                 if (!running || isFetching) return;
                 if (frameBuffer.length >= maxBufferSize) {
@@ -2021,7 +2021,7 @@ window.app = new Vue({
                 isFetching = true;
                 var fetchStart = performance.now();
 
-                // 使用二进制图片端点 (根据画质设置动态调整)
+                // Use binary image endpoint (dynamically adjusted by quality settings)
                 var qp = self.getQualityParams();
                 fetch('/inspector/' + self.deviceUdid + '/screenshot/img?q=' + qp.q + '&s=' + qp.s + '&t=' + Date.now())
                     .then(function(response) {
@@ -2042,12 +2042,12 @@ window.app = new Vue({
                         frameBuffer.push(bitmap);
                         isFetching = false;
 
-                        // 立即请求下一帧
+                        // Immediately request next frame
                         if (running) {
                             var fetchTime = performance.now() - fetchStart;
-                            // 更新截图性能统计
+                            // Update screenshot performance stats
                             self.updateScreenshotPerf(Math.round(fetchTime));
-                            // 更新计时瀑布图 (HTTP 模式估算)
+                            // Update timing waterfall (HTTP mode estimation)
                             self.timingWaterfall = {
                                 capture: Math.round(fetchTime * 0.7),
                                 resize: Math.round(fetchTime * 0.1),
@@ -2072,10 +2072,10 @@ window.app = new Vue({
                     });
             }
 
-            // 启动渲染循环和获取循环
+            // Start render loop and fetch loop
             renderFrame();
             fetchScreenshot();
-            // 并行预取多帧
+            // Parallel prefetch multiple frames
             setTimeout(fetchScreenshot, 50);
             setTimeout(fetchScreenshot, 100);
 
@@ -2087,28 +2087,28 @@ window.app = new Vue({
             var element = this.canvas.bg;
             var screen = { bounds: {} };
 
-            // 高性能触控控制器
+            // High-performance touch controller
             var control = {
-                // 请求队列和批处理
+                // Request queue and batching
                 pendingRequests: [],
                 batchTimeout: null,
-                batchDelay: 8, // 8ms 批处理窗口
+                batchDelay: 8, // 8ms batch window
 
-                // 使用 fetch + keepalive 发送命令 (不阻塞)
-                // params 中的坐标使用百分比 (xP, yP)，按每个目标设备分辨率转换
+                // Use fetch + keepalive to send commands (non-blocking)
+                // Coordinates in params use percentages (xP, yP), converted per target device resolution
                 sendToTargetDevices: function(action, params) {
                     var targets = self.getTargetDevices();
                     var cmdStart = performance.now();
                     console.log('[TOUCH] Sending to', targets.length, 'device(s):', action, params);
 
-                    // 并行发送到目标设备
+                    // Send to target devices in parallel
                     for (var i = 0; i < targets.length; i++) {
                         (function(device) {
                             var udid = device.udid;
                             var url = '/inspector/' + udid + '/touch';
                             var deviceCmdStart = performance.now();
 
-                            // 按目标设备分辨率转换百分比坐标为像素坐标
+                            // Convert percentage coordinates to pixel coordinates by target device resolution
                             var devW = device.width || 1080;
                             var devH = device.height || 1920;
                             var deviceParams = { action: action };
@@ -2126,7 +2126,7 @@ window.app = new Vue({
 
                             var payload = JSON.stringify(deviceParams);
 
-                            // 使用 fetch (非阻塞)
+                            // Use fetch (non-blocking)
                             fetch(url, {
                                 method: 'POST',
                                 headers: { 'Content-Type': 'application/json' },
@@ -2136,9 +2136,9 @@ window.app = new Vue({
                             .then(function(res) {
                                 var latency = Math.round(performance.now() - deviceCmdStart);
                                 console.log('[TOUCH] Response from', udid, ':', res.status, '(' + latency + 'ms)');
-                                // 更新设备性能统计
+                                // Update device performance stats
                                 self.updateDevicePerf(udid, latency, res.ok);
-                                // 更新总体命令延迟
+                                // Update overall command latency
                                 self.updateCommandPerf(latency);
                             })
                             .catch(function(err) {
@@ -2150,12 +2150,12 @@ window.app = new Vue({
                     }
                 },
 
-                // 立即发送点击 (最低延迟) - 使用百分比坐标
+                // Send click immediately (lowest latency) - using percentage coordinates
                 sendClickImmediate: function(xP, yP) {
                     this.sendToTargetDevices('click', { xP: xP, yP: yP });
                 },
 
-                // 批量发送滑动轨迹 - 使用百分比坐标
+                // Batch send swipe trajectory - using percentage coordinates
                 sendSwipeImmediate: function(xP1, yP1, xP2, yP2, duration) {
                     this.sendToTargetDevices('swipe', {
                         xP: xP1, yP: yP1,
@@ -2164,10 +2164,10 @@ window.app = new Vue({
                     });
                 },
 
-                // 触控状态
+                // Touch state
                 touchStart: null,
                 touchPoints: [],
-                swipeThreshold: 0.015, // 1.5% 移动判定为滑动
+                swipeThreshold: 0.015, // 1.5% movement threshold for swipe detection
 
                 touchDown: function(id, xP, yP, pressure) {
                     this.touchStart = {
@@ -2181,7 +2181,7 @@ window.app = new Vue({
                 touchMove: function(id, xP, yP, pressure) {
                     if (this.touchStart) {
                         this.touchPoints.push({ xP: xP, yP: yP, time: performance.now() });
-                        // 限制轨迹点数量
+                        // Limit number of trajectory points
                         if (this.touchPoints.length > 50) {
                             this.touchPoints = this.touchPoints.slice(-30);
                         }
@@ -2197,16 +2197,16 @@ window.app = new Vue({
                     var startXP = this.touchStart.xP;
                     var startYP = this.touchStart.yP;
 
-                    // 获取最后的触点
+                    // Get last touch point
                     var lastPoint = this.touchPoints[this.touchPoints.length - 1] || this.touchStart;
                     var endXP = lastPoint.xP;
                     var endYP = lastPoint.yP;
 
-                    // 计算移动距离 (百分比)
+                    // Calculate movement distance (percentage)
                     var deltaXP = Math.abs(endXP - startXP);
                     var deltaYP = Math.abs(endYP - startYP);
 
-                    // 计算持续时间
+                    // Calculate duration
                     var duration = performance.now() - this.touchStart.time;
 
                     console.log('[TOUCH] touchUp:', {
@@ -2216,15 +2216,18 @@ window.app = new Vue({
                     });
 
                     if (deltaXP > this.swipeThreshold || deltaYP > this.swipeThreshold) {
-                        // 滑动操作 - 根据实际滑动时间调整
+                        // Clamp coordinates to valid [0, 1] range (mouse may exit canvas)
+                        endXP = Math.max(0, Math.min(1, endXP));
+                        endYP = Math.max(0, Math.min(1, endYP));
+                        // Swipe action - adjusted based on actual swipe duration
                         var swipeDuration = Math.min(Math.max(duration * 0.8, 100), 500);
                         this.sendSwipeImmediate(startXP, startYP, endXP, endYP, Math.floor(swipeDuration));
                     } else {
-                        // 点击操作 - 发送百分比，由 sendToTargetDevices 按设备分辨率转换
+                        // Click action - send percentages, sendToTargetDevices converts per device resolution
                         this.sendClickImmediate(startXP, startYP);
                     }
 
-                    // 清理状态
+                    // Clean up state
                     this.touchStart = null;
                     this.touchPoints = [];
                 },
@@ -2275,10 +2278,13 @@ window.app = new Vue({
                 var scaled = coords(screen.bounds.w, screen.bounds.h, x, y, self.rotation);
 
                 control.touchDown(0, scaled.xP, scaled.yP, pressure);
+                // Store page coordinates for pixel-distance swipe detection
+                control.touchStart.pageX = e.pageX;
+                control.touchStart.pageY = e.pageY;
                 control.touchCommit();
 
                 element.removeEventListener('mousemove', mouseHoverListener);
-                element.addEventListener('mousemove', mouseMoveListener);
+                document.addEventListener('mousemove', mouseMoveListener);
                 document.addEventListener('mouseup', mouseUpListener);
             }
 
@@ -2302,6 +2308,21 @@ window.app = new Vue({
                 if (e.which === 3) return;
                 e.preventDefault();
 
+                // Compute pixel distance and ensure end coords are set
+                if (control.touchStart && control.touchStart.pageX !== undefined) {
+                    var upPageX = e.pageX || 0;
+                    var upPageY = e.pageY || 0;
+                    var pixelDx = Math.abs(upPageX - control.touchStart.pageX);
+                    var pixelDy = Math.abs(upPageY - control.touchStart.pageY);
+                    if ((pixelDx > 10 || pixelDy > 10) && control.touchPoints.length <= 1) {
+                        calculateBounds();
+                        var endX = upPageX - screen.bounds.x;
+                        var endY = upPageY - screen.bounds.y;
+                        var scaled = coords(screen.bounds.w, screen.bounds.h, endX, endY, self.rotation);
+                        control.touchPoints.push({ xP: scaled.xP, yP: scaled.yP, time: performance.now() });
+                    }
+                }
+
                 control.touchUp(0);
                 control.touchCommit();
 
@@ -2316,7 +2337,7 @@ window.app = new Vue({
             }
 
             function stopMousing() {
-                element.removeEventListener('mousemove', mouseMoveListener);
+                document.removeEventListener('mousemove', mouseMoveListener);
                 document.removeEventListener('mouseup', mouseUpListener);
                 deactiveFinger(0);
             }
@@ -2345,7 +2366,7 @@ window.app = new Vue({
             var wheelTimer, fromYP;
 
             function mouseWheelDelayTouchUp() {
-                // 滚轮滑动使用后端API
+                // Scroll wheel swipe using backend API
                 clearTimeout(wheelTimer);
                 wheelTimer = setTimeout(function() {
                     fromYP = null;
@@ -2369,7 +2390,7 @@ window.app = new Vue({
                 var toYP = fromYP + (event.wheelDeltaY < 0 ? -0.1 : 0.1);
                 toYP = Math.max(0.1, Math.min(0.9, toYP));
 
-                // 发送滑动命令到目标设备 (使用百分比坐标)
+                // Send swipe command to target devices (using percentage coordinates)
                 control.sendToTargetDevices('swipe', {
                     xP: wheelStartXP, yP: fromYP,
                     x2P: wheelStartXP, y2P: toYP,

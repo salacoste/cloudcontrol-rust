@@ -4,7 +4,7 @@
 
 project: cloudcontrol-rust
 generated_date: 2026-03-05
-last_updated: 2026-03-08
+last_updated: 2026-03-10
 
 # Status Definitions:
 # Epic: backlog → in-progress → done
@@ -253,18 +253,18 @@ summary:
   post_mvp_epics: 1
   post_mvp_stories: 4
 
-  # Status counts (all start as backlog)
+  # Status counts (updated 2026-03-10)
   status_counts:
     epic:
-      backlog: 7
+      backlog: 0
       in_progress: 0
-      done: 0
+      done: 7
     story:
-      backlog: 39
+      backlog: 0
       ready_for_dev: 0
       in_progress: 0
       review: 0
-      done: 0
+      done: 39
 
 # Recommended Sprint Order
 recommended_order:

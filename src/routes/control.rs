@@ -1188,49 +1188,17 @@ pub async fn inspector_touch(
         (x, y, x2, y2, duration_ms)
     };
 
-    // Validate start coordinates (x, y) against device display bounds
-    if x < 0 || x >= display_width {
-        return HttpResponse::BadRequest().json(json!({
-            "status": "error",
-            "error": "ERR_INVALID_REQUEST",
-            "message": format!("X coordinate {} out of bounds. Device resolution: {}x{}", x, display_width, display_height)
-        }));
+    // Clamp coordinates to valid device display bounds (edge touches are valid intent)
+    let max_x = (display_width - 1).max(0);
+    let max_y = (display_height - 1).max(0);
+    if x < 0 || x > max_x || y < 0 || y > max_y || x2 < 0 || x2 > max_x || y2 < 0 || y2 > max_y {
+        tracing::debug!("[TOUCH] Clamping coords ({},{})→({},{}) to display {}x{}", x, y, x2, y2, display_width, display_height);
     }
-    if y < 0 || y >= display_height {
-        return HttpResponse::BadRequest().json(json!({
-            "status": "error",
-            "error": "ERR_INVALID_REQUEST",
-            "message": format!("Y coordinate {} out of bounds. Device resolution: {}x{}", y, display_width, display_height)
-        }));
-    }
-
-    // Swipe-specific validation
-    if action == "swipe" {
-        // Validate duration is positive
-        if duration_ms <= 0 {
-            return HttpResponse::BadRequest().json(json!({
-                "status": "error",
-                "error": "ERR_INVALID_REQUEST",
-                "message": "Duration must be positive"
-            }));
-        }
-
-        // Validate end coordinates (x2, y2) against device display bounds
-        if x2 < 0 || x2 >= display_width {
-            return HttpResponse::BadRequest().json(json!({
-                "status": "error",
-                "error": "ERR_INVALID_REQUEST",
-                "message": format!("X2 coordinate {} out of bounds. Device resolution: {}x{}", x2, display_width, display_height)
-            }));
-        }
-        if y2 < 0 || y2 >= display_height {
-            return HttpResponse::BadRequest().json(json!({
-                "status": "error",
-                "error": "ERR_INVALID_REQUEST",
-                "message": format!("Y2 coordinate {} out of bounds. Device resolution: {}x{}", y2, display_width, display_height)
-            }));
-        }
-    }
+    let x = x.max(0).min(max_x);
+    let y = y.max(0).min(max_y);
+    let x2 = x2.max(0).min(max_x);
+    let y2 = y2.max(0).min(max_y);
+    let duration_ms = if action == "swipe" { duration_ms.max(1) } else { duration_ms };
 
     // Mock device
     if device.get("is_mock").and_then(|v| v.as_bool()).unwrap_or(false) {
@@ -1265,21 +1233,28 @@ pub async fn inspector_touch(
     let serial = device.get("serial").and_then(|v| v.as_str()).unwrap_or("").to_string();
 
     tokio::spawn(async move {
-        let result = if action == "swipe" {
-            client.swipe(x, y, x2, y2, duration.max(0.05).min(2.0)).await
-        } else {
-            client.click(x, y).await
-        };
-        if let Err(e) = result {
-            tracing::warn!("[TOUCH] u2 failed {}: {}, trying ADB fallback", client.udid, e);
+        if action == "swipe" {
+            // Use ADB input swipe directly — ATX JSON-RPC swipe returns success
+            // but does nothing on many MIUI/Xiaomi devices
             if !serial.is_empty() {
-                let adb_result = if action == "swipe" {
-                    Adb::input_swipe(&serial, x, y, x2, y2, duration_ms.max(50).min(2000)).await
-                } else {
-                    Adb::input_tap(&serial, x, y).await
-                };
-                if let Err(e2) = adb_result {
-                    tracing::error!("[TOUCH] ADB fallback also failed {}: {}", client.udid, e2);
+                if let Err(e) = Adb::input_swipe(&serial, x, y, x2, y2, duration_ms.max(50).min(2000)).await {
+                    tracing::warn!("[TOUCH] ADB swipe failed {}: {}, trying ATX fallback", client.udid, e);
+                    if let Err(e2) = client.swipe(x, y, x2, y2, duration.max(0.05).min(2.0)).await {
+                        tracing::error!("[TOUCH] ATX swipe also failed {}: {}", client.udid, e2);
+                    }
+                }
+            } else {
+                if let Err(e) = client.swipe(x, y, x2, y2, duration.max(0.05).min(2.0)).await {
+                    tracing::error!("[TOUCH] ATX swipe failed {}: {}", client.udid, e);
+                }
+            }
+        } else {
+            if let Err(e) = client.click(x, y).await {
+                tracing::warn!("[TOUCH] u2 click failed {}: {}, trying ADB fallback", client.udid, e);
+                if !serial.is_empty() {
+                    if let Err(e2) = Adb::input_tap(&serial, x, y).await {
+                        tracing::error!("[TOUCH] ADB tap also failed {}: {}", client.udid, e2);
+                    }
                 }
             }
         }
@@ -1630,7 +1605,7 @@ pub async fn inspector_upload(
 
         return HttpResponse::Ok().json(json!({
             "status": "ok",
-            "message": format!("文件已上传到: {}", device_path),
+            "message": format!("File uploaded to: {}", device_path),
             "path": device_path,
         }));
     }
@@ -2787,9 +2762,9 @@ pub async fn atxagent(
         .await
     {
         Ok(resp) if resp.status().is_success() => {
-            HttpResponse::Ok().body(format!("atx-agent[{}]成功", method))
+            HttpResponse::Ok().body(format!("atx-agent[{}] success", method))
         }
-        _ => HttpResponse::NotFound().body(format!("atx-agent[{}]失败", method)),
+        _ => HttpResponse::NotFound().body(format!("atx-agent[{}] failed", method)),
     }
 }
 

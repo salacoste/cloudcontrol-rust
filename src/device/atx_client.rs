@@ -235,22 +235,24 @@ impl AtxClient {
         }
     }
 
-    /// GET /info → device info JSON
+    /// Device info — tries GET /info first, falls back to JSON-RPC deviceInfo.
     pub async fn device_info(&self) -> Result<Value, String> {
+        // Try GET /info (old atx-agent)
         let url = format!("{}/info", self.base_url);
-        let resp = self
-            .client
-            .get(&url)
-            .send()
-            .await
-            .map_err(|e| format!("Device info request failed: {}", e))?;
+        match self.client.get(&url).send().await {
+            Ok(resp) if resp.status().is_success() => {
+                match resp.json::<Value>().await {
+                    Ok(json) => return Ok(json),
+                    Err(e) => tracing::debug!("[ATX] GET /info JSON parse failed for {}: {}", self.udid, e),
+                }
+            }
+            Ok(resp) => tracing::debug!("[ATX] GET /info returned {} for {}", resp.status(), self.udid),
+            Err(e) => tracing::debug!("[ATX] GET /info request failed for {}: {}", self.udid, e),
+        }
 
-        let json: Value = resp
-            .json()
-            .await
-            .map_err(|e| format!("Failed to parse device info: {}", e))?;
-
-        Ok(json)
+        // Fallback: JSON-RPC deviceInfo (new u2.jar)
+        let result = self.jsonrpc("deviceInfo", vec![]).await?;
+        Ok(result)
     }
 
     /// GET /shell?command=<cmd> → execute shell on device

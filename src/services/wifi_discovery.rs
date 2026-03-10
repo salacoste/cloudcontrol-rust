@@ -167,23 +167,70 @@ impl WifiDiscovery {
     }
 
     /// Probe a single IP:port for ATX Agent.
+    /// Tries GET /info first (old atx-agent), then JSON-RPC deviceInfo (new u2.jar).
     async fn probe_device(client: &Client, ip: &str, port: u16) -> Option<(Value, u16)> {
-        let url = format!("http://{}:{}/info", ip, port);
+        let base = format!("http://{}:{}", ip, port);
 
-        let resp = client.get(&url).send().await.ok()?;
-
-        if !resp.status().is_success() {
-            return None;
+        // Try 1: GET /info (old atx-agent on port 7912)
+        if let Ok(resp) = client.get(&format!("{}/info", base)).send().await {
+            if resp.status().is_success() {
+                if let Ok(info) = resp.json::<Value>().await {
+                    if info.get("serial").is_some()
+                        || info.get("brand").is_some()
+                        || info.get("model").is_some()
+                    {
+                        return Some((info, port));
+                    }
+                }
+            }
         }
 
-        let info: Value = resp.json().await.ok()?;
+        // Try 2: JSON-RPC deviceInfo (new u2.jar on port 9008)
+        let rpc_body = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "deviceInfo",
+            "params": []
+        });
+        if let Ok(resp) = client
+            .post(&format!("{}/jsonrpc/0", base))
+            .json(&rpc_body)
+            .send()
+            .await
+        {
+            if let Ok(json) = resp.json::<Value>().await {
+                if let Some(result) = json.get("result") {
+                    // Map JSON-RPC deviceInfo fields to expected format
+                    let model = result
+                        .get("productName")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("Unknown");
+                    let sdk = result.get("sdkInt").and_then(|v| v.as_i64()).unwrap_or(30);
+                    let width = result
+                        .get("displayWidth")
+                        .and_then(|v| v.as_i64())
+                        .unwrap_or(1080);
+                    let height = result
+                        .get("displayHeight")
+                        .and_then(|v| v.as_i64())
+                        .unwrap_or(1920);
 
-        // Validate it's actually an ATX agent by checking for expected fields
-        if info.get("serial").is_some() || info.get("brand").is_some() || info.get("model").is_some() {
-            Some((info, port))
-        } else {
-            None
+                    let serial = result
+                        .get("serial")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    let info = serde_json::json!({
+                        "model": model,
+                        "sdk": sdk,
+                        "serial": serial,
+                        "display": { "width": width, "height": height },
+                    });
+                    return Some((info, port));
+                }
+            }
         }
+
+        None
     }
 
     /// Build device data from ATX agent info.
