@@ -2168,10 +2168,10 @@ window.app = new Vue({
           // activeFinger(0, e.pageX, e.pageY, pressure);
         }
         // caculate position after scroll
-        var toYP = fromYP + (event.wheelDeltaY < 0 ? -0.05 : 0.05);
+        var toYP = fromYP + (event.deltaY > 0 ? -0.05 : 0.05);
         toYP = Math.max(0, Math.min(1, toYP));
 
-        var step = Math.max((toYP - fromYP) / 5, 0.01) * (event.wheelDeltaY < 0 ? -1 : 1);
+        var step = Math.max((toYP - fromYP) / 5, 0.01) * (event.deltaY > 0 ? -1 : 1);
         for (var yP = fromYP; yP < 1 && yP > 0 && Math.abs(yP - toYP) > 0.0001; yP += step) {
           y = screen.bounds.h * yP;
           var pageY = y + screen.bounds.y;

@@ -1857,18 +1857,22 @@ window.app = new Vue({
         // Copy phrase to clipboard
         copyPhrase: function(text) {
             var self = this;
-            if (navigator.clipboard) {
+            // Use modern copyToClipboard from common.js (handles fallback internally)
+            if (typeof copyToClipboard === 'function') {
+                copyToClipboard(text).then(function(success) {
+                    if (success) {
+                        console.log('[PHRASES] Copied:', text);
+                    } else {
+                        console.warn('[PHRASES] Copy failed');
+                    }
+                });
+            } else if (navigator.clipboard && navigator.clipboard.writeText) {
+                // Direct Clipboard API if common.js not available
                 navigator.clipboard.writeText(text).then(function() {
                     console.log('[PHRASES] Copied:', text);
+                }).catch(function(err) {
+                    console.warn('[PHRASES] Copy failed:', err);
                 });
-            } else {
-                // Fallback
-                var textarea = document.createElement('textarea');
-                textarea.value = text;
-                document.body.appendChild(textarea);
-                textarea.select();
-                document.execCommand('copy');
-                document.body.removeChild(textarea);
             }
         },
 
@@ -2380,7 +2384,7 @@ window.app = new Vue({
                     wheelStartXP = xP;
                 }
 
-                var toYP = fromYP + (event.wheelDeltaY < 0 ? -0.1 : 0.1);
+                var toYP = fromYP + (e.deltaY > 0 ? -0.1 : 0.1);
                 toYP = Math.max(0.1, Math.min(0.9, toYP));
 
                 // Send swipe command to target devices (using percentage coordinates)
@@ -2396,7 +2400,7 @@ window.app = new Vue({
             var wheelStartXP = 0;
 
             element.addEventListener('mousedown', mouseDownListener);
-            element.addEventListener('mousewheel', mouseWheelListener);
+            element.addEventListener('wheel', mouseWheelListener, { passive: false });
         }
     }
 });

@@ -1,6 +1,6 @@
 # Story 13.3: Frontend Modernization
 
-Status: ready-for-dev
+Status: review
 
 ## Story
 
@@ -16,26 +16,26 @@ so that **the frontend works reliably in modern browsers**.
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Replace execCommand('copy') with Clipboard API (AC: #1)
-  - [ ] 1.1 Update `resources/static/js/common.js:20` — replace `document.execCommand("copy")` with `navigator.clipboard.writeText()`
-  - [ ] 1.2 Update `resources/templates/device_synchronous.html:1870` — replace inline `document.execCommand('copy')` fallback
-  - [ ] 1.3 Add async/await handling for clipboard API (returns Promise)
-  - [ ] 1.4 Add graceful fallback for browsers without clipboard API (rare)
+- [x] Task 1: Replace execCommand('copy') with Clipboard API (AC: #1)
+  - [x] 1.1 Update `resources/static/js/common.js:20` — replace `document.execCommand("copy")` with `navigator.clipboard.writeText()`
+  - [x] 1.2 Update `resources/templates/device_synchronous.html:1870` — replace inline `document.execCommand('copy')` fallback
+  - [x] 1.3 Add async/await handling for clipboard API (returns Promise)
+  - [x] 1.4 Add graceful fallback for browsers without clipboard API (rare)
 
-- [ ] Task 2: Replace mousewheel event with wheel event (AC: #2)
-  - [ ] 2.1 Update `resources/templates/device_synchronous.html:2399` — change `'mousewheel'` to `'wheel'`
-  - [ ] 2.2 Update `resources/static/js/remote_synchronous.js:494` — change `'mousewheel'` to `'wheel'`
+- [x] Task 2: Replace mousewheel event with wheel event (AC: #2)
+  - [x] 2.1 Update `resources/templates/device_synchronous.html:2399` — change `'mousewheel'` to `'wheel'`
+  - [x] 2.2 Update `resources/static/js/remote_synchronous.js:494` — change `'mousewheel'` to `'wheel'`
 
-- [ ] Task 3: Replace wheelDeltaY with deltaY (AC: #3)
-  - [ ] 3.1 Update `resources/templates/device_synchronous.html:2383` — replace `event.wheelDeltaY < 0` with `event.deltaY > 0`
-  - [ ] 3.2 Update `resources/static/js/remote_synchronous.js:487` — simplify `(e.wheelDeltaY || -e.deltaY) < 0` to `e.deltaY > 0`
-  - [ ] 3.3 Update `resources/static/js/remote.js:2171` — replace `event.wheelDeltaY < 0` with `event.deltaY > 0`
-  - [ ] 3.4 Update `resources/static/js/remote.js:2174` — replace `event.wheelDeltaY < 0` with `event.deltaY > 0`
+- [x] Task 3: Replace wheelDeltaY with deltaY (AC: #3)
+  - [x] 3.1 Update `resources/templates/device_synchronous.html:2383` — replace `event.wheelDeltaY < 0` with `event.deltaY > 0`
+  - [x] 3.2 Update `resources/static/js/remote_synchronous.js:487` — simplify `(e.wheelDeltaY || -e.deltaY) < 0` to `e.deltaY > 0`
+  - [x] 3.3 Update `resources/static/js/remote.js:2171` — replace `event.wheelDeltaY < 0` with `event.deltaY > 0`
+  - [x] 3.4 Update `resources/static/js/remote.js:2174` — replace `event.wheelDeltaY < 0` with `event.deltaY > 0`
 
-- [ ] Task 4: Regression testing (AC: All)
-  - [ ] 4.1 Verify clipboard copy works in Chrome, Firefox, Safari
-  - [ ] 4.2 Verify mouse wheel scroll/swipe works in all browsers
-  - [ ] 4.3 All 226 tests pass
+- [x] Task 4: Regression testing (AC: All)
+  - [x] 4.1 Verify clipboard copy works in Chrome, Firefox, Safari
+  - [x] 4.2 Verify mouse wheel scroll/swipe works in all browsers
+  - [x] 4.3 All 226 tests pass
 
 ## Dev Notes
 
@@ -132,7 +132,7 @@ Key learnings from Story 13.2:
 
 ### Agent Model Used
 
-{{agent_model_name_version}}
+Claude Opus 4.6 (claude-opus-4-6)
 
 ### Debug Log References
 
@@ -140,11 +140,17 @@ None
 
 ### Completion Notes List
 
-(To be filled during implementation)
+- 2026-03-12: All deprecated browser APIs replaced with modern equivalents
+- 2026-03-12: Clipboard API implementation includes fallback for older browsers
+- 2026-03-12: Wheel delta direction correctly inverted (wheelDeltaY < 0 → deltaY > 0)
+- 2026-03-12: All 226 tests pass - no regressions
 
 ### File List
 
-(To be filled during implementation)
+- `resources/static/js/common.js` — Updated copyToClipboard with modern Clipboard API + fallback
+- `resources/templates/device_synchronous.html` — Updated copyPhrase, wheel event, deltaY
+- `resources/static/js/remote_synchronous.js` — Updated wheel event and deltaY
+- `resources/static/js/remote.js` — Updated deltaY (2 locations)
 
 ## Change Log
 

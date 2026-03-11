@@ -484,14 +484,14 @@ window.app = new Vue({
                 var e = event.originalEvent || event;
                 e.preventDefault();
                 var pos = toDeviceCoords(e.pageX, e.pageY);
-                var scrollAmount = (e.wheelDeltaY || -e.deltaY) < 0 ? 300 : -300;
+                var scrollAmount = e.deltaY > 0 ? 300 : -300;
                 // Simulate swipe for scroll
                 self.sendTouchToDevices(pos.x, pos.y, pos.x, pos.y + scrollAmount, 300);
             }
 
             /* bind listeners */
             element.addEventListener('mousedown', mouseDownListener);
-            element.addEventListener('mousewheel', mouseWheelListener);
+            element.addEventListener('wheel', mouseWheelListener, { passive: false });
         }
     }
 })

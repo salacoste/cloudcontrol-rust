@@ -1,16 +1,31 @@
-// Copies a string to the clipboard. Must be called from within an 
-// event handler such as click. May return false if it failed, but
-// this is not always possible. Browser support for Chrome 43+, 
-// Firefox 42+, Safari 10+, Edge and IE 10+.
-// IE: The clipboard feature may be disabled by an administrator. By
-// default a prompt is shown the first time the clipboard is 
-// used (per session).
+// Copies a string to the clipboard using the modern Clipboard API.
+// Falls back to execCommand for older browsers.
+// Browser support: Chrome 66+, Firefox 63+, Safari 13.1+, Edge 79+
+// Returns a Promise that resolves to true on success, false on failure.
 function copyToClipboard(text) {
-  if (window.clipboardData && window.clipboardData.setData) {
-    // IE specific code path to prevent textarea being shown while dialog is visible.
-    return clipboardData.setData("Text", text);
+  // Modern Clipboard API (preferred)
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    return navigator.clipboard.writeText(text).then(function() {
+      return true;
+    }).catch(function(err) {
+      console.warn("Clipboard API failed, trying fallback:", err);
+      return fallbackCopyToClipboard(text);
+    });
+  }
 
-  } else if (document.queryCommandSupported && document.queryCommandSupported("copy")) {
+  // Fallback for browsers without Clipboard API
+  return Promise.resolve(fallbackCopyToClipboard(text));
+}
+
+// Fallback copy method using deprecated execCommand (for older browsers)
+function fallbackCopyToClipboard(text) {
+  // IE specific code path
+  if (window.clipboardData && window.clipboardData.setData) {
+    return clipboardData.setData("Text", text);
+  }
+
+  // Standard fallback using textarea
+  if (document.queryCommandSupported && document.queryCommandSupported("copy")) {
     var textarea = document.createElement("textarea");
     textarea.textContent = text;
     textarea.style.position = "fixed"; // Prevent scrolling to bottom of page in MS Edge.
@@ -25,6 +40,8 @@ function copyToClipboard(text) {
       document.body.removeChild(textarea);
     }
   }
+
+  return false;
 }
 
 /* Image Pool */
