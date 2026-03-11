@@ -226,6 +226,22 @@ impl Database {
             .execute(&self.pool)
             .await;
 
+        // Migration: Add product_id column to existing databases
+        // This will silently fail if column already exists, which is fine
+        let _ = sqlx::query("ALTER TABLE devices ADD COLUMN product_id INTEGER")
+            .execute(&self.pool)
+            .await;
+
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_devices_product_id ON devices(product_id)")
+            .execute(&self.pool)
+            .await?;
+
+        // Migration: Add property_id column to existing databases
+        // This will silently fail if column already exists, which is fine
+        let _ = sqlx::query("ALTER TABLE devices ADD COLUMN property_id TEXT")
+            .execute(&self.pool)
+            .await;
+
         // Recording sessions table
         sqlx::query(
             r#"
@@ -318,6 +334,79 @@ impl Database {
             .execute(&self.pool)
             .await?;
 
+        // Products catalog table
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS products (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                brand TEXT NOT NULL,
+                model TEXT NOT NULL,
+                name TEXT,
+                cpu TEXT,
+                gpu TEXT,
+                link TEXT,
+                coverage INTEGER DEFAULT 0
+            )
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_products_brand ON products(brand)")
+            .execute(&self.pool)
+            .await?;
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_products_brand_model ON products(brand, model)")
+            .execute(&self.pool)
+            .await?;
+
+        // Providers table (server nodes in the device farm)
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS providers (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ip TEXT NOT NULL UNIQUE,
+                notes TEXT DEFAULT '',
+                present INTEGER DEFAULT 0,
+                presence_changed_at INTEGER,
+                created_at INTEGER NOT NULL
+            )
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_providers_ip ON providers(ip)")
+            .execute(&self.pool)
+            .await?;
+
+        // Videos table (JPEG-to-MP4 video recordings, Story 11-2)
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS videos (
+                id TEXT PRIMARY KEY,
+                udid TEXT NOT NULL,
+                file_path TEXT NOT NULL,
+                started_at TEXT NOT NULL,
+                stopped_at TEXT,
+                frame_count INTEGER DEFAULT 0,
+                fps INTEGER DEFAULT 2,
+                status TEXT DEFAULT 'recording',
+                duration_ms INTEGER,
+                file_size INTEGER,
+                device_name TEXT
+            )
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_videos_udid ON videos(udid)")
+            .execute(&self.pool)
+            .await?;
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_videos_status ON videos(status)")
+            .execute(&self.pool)
+            .await?;
+
         Ok(())
     }
 
@@ -359,7 +448,7 @@ impl Database {
                 map.insert(json_key.to_string(), Value::Bool(v.unwrap_or(0) != 0));
             }
             // Integer fields
-            else if col == "port" || col == "sdk" {
+            else if col == "port" || col == "sdk" || col == "product_id" {
                 let v: Option<i64> = row.try_get(col).ok().flatten();
                 match v {
                     Some(n) => map.insert(json_key.to_string(), Value::Number(n.into())),
@@ -1420,6 +1509,473 @@ impl Database {
             .await?;
         Ok(())
     }
+
+    // ─── Product Catalog Operations ───
+
+    /// Create a new product in the catalog.
+    pub async fn create_product(
+        &self,
+        brand: &str,
+        model: &str,
+        name: Option<&str>,
+        cpu: Option<&str>,
+        gpu: Option<&str>,
+        link: Option<&str>,
+        coverage: Option<i64>,
+    ) -> Result<crate::models::product::Product, sqlx::Error> {
+        let result = sqlx::query(
+            "INSERT INTO products (brand, model, name, cpu, gpu, link, coverage) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)"
+        )
+        .bind(brand)
+        .bind(model)
+        .bind(name)
+        .bind(cpu)
+        .bind(gpu)
+        .bind(link)
+        .bind(coverage.unwrap_or(0))
+        .execute(&self.pool)
+        .await?;
+
+        let id = result.last_insert_rowid();
+        Ok(crate::models::product::Product {
+            id,
+            brand: brand.to_string(),
+            model: model.to_string(),
+            name: name.map(|s| s.to_string()),
+            cpu: cpu.map(|s| s.to_string()),
+            gpu: gpu.map(|s| s.to_string()),
+            link: link.map(|s| s.to_string()),
+            coverage: Some(coverage.unwrap_or(0)),
+        })
+    }
+
+    /// Get a product by ID.
+    pub async fn get_product(&self, id: i64) -> Result<Option<crate::models::product::Product>, sqlx::Error> {
+        sqlx::query_as::<_, crate::models::product::Product>(
+            "SELECT id, brand, model, name, cpu, gpu, link, coverage FROM products WHERE id = ?1"
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await
+    }
+
+    /// List products with optional brand/model partial-match filters.
+    pub async fn list_products(
+        &self,
+        brand_filter: Option<&str>,
+        model_filter: Option<&str>,
+    ) -> Result<Vec<crate::models::product::Product>, sqlx::Error> {
+        // Escape LIKE wildcards (% and _) in user input
+        let brand_like = brand_filter.map(|b| format!("%{}%", b.replace('%', "\\%").replace('_', "\\_")));
+        let model_like = model_filter.map(|m| format!("%{}%", m.replace('%', "\\%").replace('_', "\\_")));
+
+        match (brand_like.as_ref(), model_like.as_ref()) {
+            (Some(b), Some(m)) => {
+                sqlx::query_as::<_, crate::models::product::Product>(
+                    "SELECT id, brand, model, name, cpu, gpu, link, coverage FROM products WHERE brand LIKE ?1 ESCAPE '\\' AND model LIKE ?2 ESCAPE '\\' ORDER BY brand, model"
+                )
+                .bind(b)
+                .bind(m)
+                .fetch_all(&self.pool)
+                .await
+            }
+            (Some(b), None) => {
+                sqlx::query_as::<_, crate::models::product::Product>(
+                    "SELECT id, brand, model, name, cpu, gpu, link, coverage FROM products WHERE brand LIKE ?1 ESCAPE '\\' ORDER BY brand, model"
+                )
+                .bind(b)
+                .fetch_all(&self.pool)
+                .await
+            }
+            (None, Some(m)) => {
+                sqlx::query_as::<_, crate::models::product::Product>(
+                    "SELECT id, brand, model, name, cpu, gpu, link, coverage FROM products WHERE model LIKE ?1 ESCAPE '\\' ORDER BY brand, model"
+                )
+                .bind(m)
+                .fetch_all(&self.pool)
+                .await
+            }
+            (None, None) => {
+                sqlx::query_as::<_, crate::models::product::Product>(
+                    "SELECT id, brand, model, name, cpu, gpu, link, coverage FROM products ORDER BY brand, model"
+                )
+                .fetch_all(&self.pool)
+                .await
+            }
+        }
+    }
+
+    /// Update a product by ID. Returns the updated product, or None if not found.
+    pub async fn update_product(
+        &self,
+        id: i64,
+        brand: Option<&str>,
+        model: Option<&str>,
+        name: Option<&str>,
+        cpu: Option<&str>,
+        gpu: Option<&str>,
+        link: Option<&str>,
+        coverage: Option<i64>,
+    ) -> Result<Option<crate::models::product::Product>, sqlx::Error> {
+        let mut set_clauses = Vec::new();
+        let mut param_idx = 1;
+
+        // Build dynamic SET clause
+        if brand.is_some() { set_clauses.push(format!("brand = ?{}", param_idx)); param_idx += 1; }
+        if model.is_some() { set_clauses.push(format!("model = ?{}", param_idx)); param_idx += 1; }
+        if name.is_some() { set_clauses.push(format!("name = ?{}", param_idx)); param_idx += 1; }
+        if cpu.is_some() { set_clauses.push(format!("cpu = ?{}", param_idx)); param_idx += 1; }
+        if gpu.is_some() { set_clauses.push(format!("gpu = ?{}", param_idx)); param_idx += 1; }
+        if link.is_some() { set_clauses.push(format!("link = ?{}", param_idx)); param_idx += 1; }
+        if coverage.is_some() { set_clauses.push(format!("coverage = ?{}", param_idx)); param_idx += 1; }
+
+        if set_clauses.is_empty() {
+            return self.get_product(id).await;
+        }
+
+        let sql = format!(
+            "UPDATE products SET {} WHERE id = ?{}",
+            set_clauses.join(", "),
+            param_idx
+        );
+
+        let mut query = sqlx::query(&sql);
+        if let Some(v) = brand { query = query.bind(v); }
+        if let Some(v) = model { query = query.bind(v); }
+        if let Some(v) = name { query = query.bind(v); }
+        if let Some(v) = cpu { query = query.bind(v); }
+        if let Some(v) = gpu { query = query.bind(v); }
+        if let Some(v) = link { query = query.bind(v); }
+        if let Some(v) = coverage { query = query.bind(v); }
+        query = query.bind(id);
+
+        let result = query.execute(&self.pool).await?;
+        if result.rows_affected() == 0 {
+            return Ok(None);
+        }
+
+        self.get_product(id).await
+    }
+
+    /// Delete a product by ID. Returns true if deleted, false if not found.
+    pub async fn delete_product(&self, id: i64) -> Result<bool, sqlx::Error> {
+        let result = sqlx::query("DELETE FROM products WHERE id = ?1")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+
+        Ok(result.rows_affected() > 0)
+    }
+
+    /// List products by exact brand and model match (legacy endpoint for edit.html).
+    pub async fn list_products_by_brand_model(
+        &self,
+        brand: &str,
+        model: &str,
+    ) -> Result<Vec<crate::models::product::Product>, sqlx::Error> {
+        sqlx::query_as::<_, crate::models::product::Product>(
+            "SELECT id, brand, model, name, cpu, gpu, link, coverage FROM products WHERE brand = ?1 AND model = ?2 ORDER BY name"
+        )
+        .bind(brand)
+        .bind(model)
+        .fetch_all(&self.pool)
+        .await
+    }
+
+    // ─── Device-Product Association ───
+
+    /// Update a device's product_id. Returns true if device was found and updated.
+    pub async fn update_device_product(
+        &self,
+        udid: &str,
+        product_id: i64,
+    ) -> Result<bool, sqlx::Error> {
+        let result = sqlx::query("UPDATE devices SET product_id = ?1 WHERE udid = ?2")
+            .bind(product_id)
+            .bind(udid)
+            .execute(&self.pool)
+            .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    /// Update a device's property_id (asset/inventory number). Returns true if device was found.
+    pub async fn update_device_property(
+        &self,
+        udid: &str,
+        property_id: &str,
+    ) -> Result<bool, sqlx::Error> {
+        let result = sqlx::query("UPDATE devices SET property_id = ?1 WHERE udid = ?2")
+            .bind(property_id)
+            .bind(udid)
+            .execute(&self.pool)
+            .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    // ─── Provider Operations ───
+
+    /// Create a new provider. Returns the created provider.
+    pub async fn create_provider(
+        &self,
+        ip: &str,
+        notes: Option<&str>,
+    ) -> Result<crate::models::provider::Provider, sqlx::Error> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+
+        let result = sqlx::query(
+            "INSERT INTO providers (ip, notes, present, created_at) VALUES (?1, ?2, 0, ?3)",
+        )
+        .bind(ip)
+        .bind(notes.unwrap_or(""))
+        .bind(now)
+        .execute(&self.pool)
+        .await?;
+
+        let id = result.last_insert_rowid();
+        Ok(crate::models::provider::Provider {
+            id,
+            ip: ip.to_string(),
+            notes: Some(notes.unwrap_or("").to_string()),
+            present: false,
+            presence_changed_at: None,
+            created_at: now,
+        })
+    }
+
+    /// List all providers ordered by id.
+    pub async fn list_providers(
+        &self,
+    ) -> Result<Vec<crate::models::provider::Provider>, sqlx::Error> {
+        sqlx::query_as::<_, crate::models::provider::Provider>(
+            "SELECT id, ip, notes, present, presence_changed_at, created_at FROM providers ORDER BY id",
+        )
+        .fetch_all(&self.pool)
+        .await
+    }
+
+    /// Get a provider by ID.
+    pub async fn get_provider(
+        &self,
+        id: i64,
+    ) -> Result<Option<crate::models::provider::Provider>, sqlx::Error> {
+        sqlx::query_as::<_, crate::models::provider::Provider>(
+            "SELECT id, ip, notes, present, presence_changed_at, created_at FROM providers WHERE id = ?1",
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await
+    }
+
+    /// Update a provider's notes. Returns the updated provider if found.
+    pub async fn update_provider_notes(
+        &self,
+        id: i64,
+        notes: &str,
+    ) -> Result<Option<crate::models::provider::Provider>, sqlx::Error> {
+        let result = sqlx::query("UPDATE providers SET notes = ?1 WHERE id = ?2")
+            .bind(notes)
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+
+        if result.rows_affected() == 0 {
+            return Ok(None);
+        }
+
+        self.get_provider(id).await
+    }
+
+    /// Count devices associated with a provider by IP.
+    pub async fn count_devices_by_provider(&self, ip: &str) -> Result<i64, sqlx::Error> {
+        let row: (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM devices WHERE provider = ?1")
+                .bind(ip)
+                .fetch_one(&self.pool)
+                .await?;
+        Ok(row.0)
+    }
+
+    /// Update a provider's presence status. Sets presence_changed_at to current timestamp.
+    pub async fn update_provider_presence(
+        &self,
+        id: i64,
+        present: bool,
+    ) -> Result<Option<crate::models::provider::Provider>, sqlx::Error> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+
+        let result = sqlx::query(
+            "UPDATE providers SET present = ?1, presence_changed_at = ?2 WHERE id = ?3",
+        )
+        .bind(present)
+        .bind(now)
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+
+        if result.rows_affected() == 0 {
+            return Ok(None);
+        }
+        self.get_provider(id).await
+    }
+
+    // ─── Video Recording Operations (Story 11-2) ───
+
+    /// Insert a new video recording record.
+    pub async fn insert_video(
+        &self,
+        info: &crate::services::video_service::VideoRecordingInfo,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "INSERT OR REPLACE INTO videos (id, udid, file_path, started_at, stopped_at, frame_count, fps, status, duration_ms, file_size, device_name) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)"
+        )
+        .bind(&info.id)
+        .bind(&info.udid)
+        .bind(&info.file_path)
+        .bind(&info.started_at)
+        .bind(&info.stopped_at)
+        .bind(info.frame_count as i64)
+        .bind(info.fps as i64)
+        .bind(&info.status)
+        .bind(info.duration_ms.map(|d| d as i64))
+        .bind(info.file_size.map(|s| s as i64))
+        .bind(&info.device_name)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Update an existing video recording record.
+    pub async fn update_video(
+        &self,
+        info: &crate::services::video_service::VideoRecordingInfo,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "UPDATE videos SET stopped_at = ?1, frame_count = ?2, status = ?3, duration_ms = ?4, file_size = ?5 WHERE id = ?6"
+        )
+        .bind(&info.stopped_at)
+        .bind(info.frame_count as i64)
+        .bind(&info.status)
+        .bind(info.duration_ms.map(|d| d as i64))
+        .bind(info.file_size.map(|s| s as i64))
+        .bind(&info.id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Get a single video recording by ID.
+    pub async fn get_video(
+        &self,
+        id: &str,
+    ) -> Result<Option<crate::services::video_service::VideoRecordingInfo>, sqlx::Error> {
+        let row = sqlx::query(
+            "SELECT id, udid, file_path, started_at, stopped_at, frame_count, fps, status, duration_ms, file_size, device_name FROM videos WHERE id = ?1"
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row.map(|r| Self::video_row_to_info(&r)))
+    }
+
+    /// List video recordings with optional filters.
+    pub async fn list_videos(
+        &self,
+        udid: Option<&str>,
+        status: Option<&str>,
+    ) -> Result<Vec<crate::services::video_service::VideoRecordingInfo>, sqlx::Error> {
+        let rows = match (udid, status) {
+            (Some(u), Some(s)) => {
+                sqlx::query(
+                    "SELECT id, udid, file_path, started_at, stopped_at, frame_count, fps, status, duration_ms, file_size, device_name FROM videos WHERE udid = ?1 AND status = ?2 ORDER BY started_at DESC"
+                )
+                .bind(u)
+                .bind(s)
+                .fetch_all(&self.pool)
+                .await?
+            }
+            (Some(u), None) => {
+                sqlx::query(
+                    "SELECT id, udid, file_path, started_at, stopped_at, frame_count, fps, status, duration_ms, file_size, device_name FROM videos WHERE udid = ?1 ORDER BY started_at DESC"
+                )
+                .bind(u)
+                .fetch_all(&self.pool)
+                .await?
+            }
+            (None, Some(s)) => {
+                sqlx::query(
+                    "SELECT id, udid, file_path, started_at, stopped_at, frame_count, fps, status, duration_ms, file_size, device_name FROM videos WHERE status = ?1 ORDER BY started_at DESC"
+                )
+                .bind(s)
+                .fetch_all(&self.pool)
+                .await?
+            }
+            (None, None) => {
+                sqlx::query(
+                    "SELECT id, udid, file_path, started_at, stopped_at, frame_count, fps, status, duration_ms, file_size, device_name FROM videos ORDER BY started_at DESC"
+                )
+                .fetch_all(&self.pool)
+                .await?
+            }
+        };
+
+        Ok(rows.iter().map(|r| Self::video_row_to_info(r)).collect())
+    }
+
+    /// Delete a video recording by ID. Returns true if a row was deleted.
+    pub async fn delete_video(&self, id: &str) -> Result<bool, sqlx::Error> {
+        let result = sqlx::query("DELETE FROM videos WHERE id = ?1")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    /// Update status for all videos matching a given status.
+    pub async fn update_videos_status(
+        &self,
+        from_status: &str,
+        to_status: &str,
+    ) -> Result<u64, sqlx::Error> {
+        let result = sqlx::query("UPDATE videos SET status = ?1 WHERE status = ?2")
+            .bind(to_status)
+            .bind(from_status)
+            .execute(&self.pool)
+            .await?;
+        Ok(result.rows_affected())
+    }
+
+    /// Convert a SQLite row into VideoRecordingInfo.
+    fn video_row_to_info(row: &SqliteRow) -> crate::services::video_service::VideoRecordingInfo {
+        crate::services::video_service::VideoRecordingInfo {
+            id: row.get("id"),
+            udid: row.get("udid"),
+            file_path: row.get("file_path"),
+            started_at: row.get("started_at"),
+            stopped_at: row.get("stopped_at"),
+            frame_count: row.get::<i64, _>("frame_count") as u64,
+            fps: row.get::<i64, _>("fps") as u32,
+            status: row.get("status"),
+            duration_ms: row.get::<Option<i64>, _>("duration_ms").map(|d| d as u64),
+            file_size: row.get::<Option<i64>, _>("file_size").map(|s| s as u64),
+            device_name: row.get("device_name"),
+        }
+    }
+
+    /// List all devices associated with a provider by IP.
+    pub async fn list_devices_by_provider(&self, ip: &str) -> Result<Vec<Value>, sqlx::Error> {
+        let rows = sqlx::query("SELECT * FROM devices WHERE provider = ?1 ORDER BY udid")
+            .bind(ip)
+            .fetch_all(&self.pool)
+            .await?;
+        Ok(rows.iter().map(Self::device_row_to_json).collect())
+    }
 }
 
 /// Helper to bind a serde_json::Value to a sqlx query.
@@ -1643,5 +2199,129 @@ mod tests {
 
         let files = db.query_install_file("g1", 0, 10).await.unwrap();
         assert_eq!(files.len(), 0);
+    }
+
+    // ── Story 11-2: Video CRUD tests ──
+
+    fn test_video_info(id: &str, udid: &str, status: &str) -> crate::services::video_service::VideoRecordingInfo {
+        crate::services::video_service::VideoRecordingInfo {
+            id: id.to_string(),
+            udid: udid.to_string(),
+            file_path: format!("recordings/video_{}_{}.mp4", udid, id),
+            started_at: "2026-03-11T12:00:00Z".to_string(),
+            stopped_at: if status != "recording" { Some("2026-03-11T12:05:00Z".to_string()) } else { None },
+            frame_count: 600,
+            fps: 2,
+            status: status.to_string(),
+            duration_ms: Some(300000),
+            file_size: Some(1024000),
+            device_name: Some("Test Device".to_string()),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_video_insert_and_get() {
+        let (_tmp, db) = create_temp_db().await;
+        let info = test_video_info("v1", "dev-1", "completed");
+        db.insert_video(&info).await.unwrap();
+
+        let retrieved = db.get_video("v1").await.unwrap();
+        assert!(retrieved.is_some());
+        let r = retrieved.unwrap();
+        assert_eq!(r.id, "v1");
+        assert_eq!(r.udid, "dev-1");
+        assert_eq!(r.status, "completed");
+        assert_eq!(r.frame_count, 600);
+        assert_eq!(r.fps, 2);
+        assert_eq!(r.file_size, Some(1024000));
+        assert_eq!(r.device_name, Some("Test Device".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_video_update() {
+        let (_tmp, db) = create_temp_db().await;
+        let mut info = test_video_info("v2", "dev-2", "recording");
+        db.insert_video(&info).await.unwrap();
+
+        // Update to completed
+        info.status = "completed".to_string();
+        info.stopped_at = Some("2026-03-11T12:10:00Z".to_string());
+        info.frame_count = 1200;
+        info.file_size = Some(2048000);
+        db.update_video(&info).await.unwrap();
+
+        let r = db.get_video("v2").await.unwrap().unwrap();
+        assert_eq!(r.status, "completed");
+        assert_eq!(r.frame_count, 1200);
+        assert_eq!(r.file_size, Some(2048000));
+        assert!(r.stopped_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_video_delete() {
+        let (_tmp, db) = create_temp_db().await;
+        let info = test_video_info("v3", "dev-3", "completed");
+        db.insert_video(&info).await.unwrap();
+
+        let deleted = db.delete_video("v3").await.unwrap();
+        assert!(deleted);
+
+        let retrieved = db.get_video("v3").await.unwrap();
+        assert!(retrieved.is_none());
+
+        // Deleting again returns false
+        let deleted_again = db.delete_video("v3").await.unwrap();
+        assert!(!deleted_again);
+    }
+
+    #[tokio::test]
+    async fn test_video_list_with_filters() {
+        let (_tmp, db) = create_temp_db().await;
+        db.insert_video(&test_video_info("a1", "dev-A", "completed")).await.unwrap();
+        db.insert_video(&test_video_info("a2", "dev-A", "failed")).await.unwrap();
+        db.insert_video(&test_video_info("b1", "dev-B", "completed")).await.unwrap();
+
+        // No filter — all 3
+        let all = db.list_videos(None, None).await.unwrap();
+        assert_eq!(all.len(), 3);
+
+        // Filter by udid
+        let dev_a = db.list_videos(Some("dev-A"), None).await.unwrap();
+        assert_eq!(dev_a.len(), 2);
+
+        // Filter by status
+        let completed = db.list_videos(None, Some("completed")).await.unwrap();
+        assert_eq!(completed.len(), 2);
+
+        // Filter by both
+        let dev_a_completed = db.list_videos(Some("dev-A"), Some("completed")).await.unwrap();
+        assert_eq!(dev_a_completed.len(), 1);
+        assert_eq!(dev_a_completed[0].id, "a1");
+    }
+
+    #[tokio::test]
+    async fn test_video_bulk_status_update() {
+        let (_tmp, db) = create_temp_db().await;
+        db.insert_video(&test_video_info("r1", "dev-1", "recording")).await.unwrap();
+        db.insert_video(&test_video_info("r2", "dev-2", "recording")).await.unwrap();
+        db.insert_video(&test_video_info("f1", "dev-3", "finalizing")).await.unwrap();
+        db.insert_video(&test_video_info("c1", "dev-4", "completed")).await.unwrap();
+
+        // Mark all "recording" as "failed"
+        let count = db.update_videos_status("recording", "failed").await.unwrap();
+        assert_eq!(count, 2);
+
+        // Mark all "finalizing" as "failed"
+        let count = db.update_videos_status("finalizing", "failed").await.unwrap();
+        assert_eq!(count, 1);
+
+        // "completed" should be unaffected
+        let completed = db.list_videos(None, Some("completed")).await.unwrap();
+        assert_eq!(completed.len(), 1);
+        assert_eq!(completed[0].id, "c1");
+
+        // All others should be "failed"
+        let failed = db.list_videos(None, Some("failed")).await.unwrap();
+        assert_eq!(failed.len(), 3);
     }
 }

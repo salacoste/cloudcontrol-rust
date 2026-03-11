@@ -43,6 +43,16 @@ impl AtxClient {
         }
     }
 
+    /// Get the base URL of this ATX client
+    pub fn base_url(&self) -> &str {
+        &self.base_url
+    }
+
+    /// Get a reference to the underlying HTTP client
+    pub fn http_client(&self) -> &Client {
+        &self.client
+    }
+
     /// Take screenshot via JSON-RPC `takeScreenshot` → returns JPEG bytes.
     /// Compatible with both new uiautomator2 (port 9008) and old atx-agent (port 7912).
     pub async fn screenshot(&self) -> Result<Vec<u8>, String> {

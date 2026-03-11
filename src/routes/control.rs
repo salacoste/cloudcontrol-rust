@@ -133,8 +133,6 @@ pub async fn remote(
     };
 
     let mut ctx = tera::Context::new();
-    ctx.insert("IP", device.get("ip").and_then(|v| v.as_str()).unwrap_or(""));
-    ctx.insert("Port", &device.get("port").and_then(|v| v.as_i64()).unwrap_or(9008));
     ctx.insert("Udid", &udid);
     ctx.insert("deviceInfo", &device);
     ctx.insert("device", &device.to_string());
@@ -158,8 +156,6 @@ pub async fn async_list_get(state: web::Data<AppState>) -> HttpResponse {
 
     if devices.is_empty() {
         ctx.insert("list", "[]");
-        ctx.insert("IP", "");
-        ctx.insert("Port", &0i64);
         ctx.insert("Width", &0i64);
         ctx.insert("Height", &0i64);
         ctx.insert("Udid", "");
@@ -184,8 +180,6 @@ pub async fn async_list_get(state: web::Data<AppState>) -> HttpResponse {
         let first_display = first.get("display").cloned().unwrap_or(json!({"width":1080,"height":1920}));
 
         ctx.insert("list", &serde_json::to_string(&ip_list).unwrap_or_default());
-        ctx.insert("IP", first.get("ip").and_then(|v| v.as_str()).unwrap_or(""));
-        ctx.insert("Port", &first.get("port").and_then(|v| v.as_i64()).unwrap_or(9008));
         ctx.insert("Width", &first_display.get("width").and_then(|v| v.as_i64()).unwrap_or(1080));
         ctx.insert("Height", &first_display.get("height").and_then(|v| v.as_i64()).unwrap_or(1920));
         ctx.insert("Udid", first.get("udid").and_then(|v| v.as_str()).unwrap_or(""));
@@ -239,8 +233,6 @@ pub async fn async_list_page(
 
     let mut ctx = tera::Context::new();
     ctx.insert("list", &serde_json::to_string(&ip_list).unwrap_or_default());
-    ctx.insert("IP", device.get("ip").and_then(|v| v.as_str()).unwrap_or(""));
-    ctx.insert("Port", &device.get("port").and_then(|v| v.as_i64()).unwrap_or(9008));
     ctx.insert("Width", &display.get("width").and_then(|v| v.as_i64()).unwrap_or(1080));
     ctx.insert("Height", &display.get("height").and_then(|v| v.as_i64()).unwrap_or(1920));
     ctx.insert("Udid", device.get("udid").and_then(|v| v.as_str()).unwrap_or(""));
@@ -257,6 +249,14 @@ pub async fn async_list_page(
 /// GET /installfile → file.html
 pub async fn installfile(state: web::Data<AppState>) -> HttpResponse {
     match state.tera.render("file.html", &tera::Context::new()) {
+        Ok(body) => HttpResponse::Ok().content_type("text/html").body(body),
+        Err(e) => HttpResponse::InternalServerError().body(format!("Template error: {}", e)),
+    }
+}
+
+/// GET /test → test.html (device diagnostic page, reads UDID from ?udid= query param)
+pub async fn test_page(state: web::Data<AppState>) -> HttpResponse {
+    match state.tera.render("test.html", &tera::Context::new()) {
         Ok(body) => HttpResponse::Ok().content_type("text/html").body(body),
         Err(e) => HttpResponse::InternalServerError().body(format!("Template error: {}", e)),
     }
@@ -292,7 +292,7 @@ pub async fn device_list(
     }
 }
 
-/// GET /devices/{udid}/info → device info JSON
+/// GET /devices/{udid}/info → device info JSON (with product data if linked)
 pub async fn device_info(
     state: web::Data<AppState>,
     path: web::Path<String>,
@@ -304,9 +304,197 @@ pub async fn device_info(
 
     let phone_service = crate::services::phone_service::PhoneService::new(state.db.clone());
     match phone_service.query_info_by_udid(&udid).await {
-        Ok(Some(device)) => HttpResponse::Ok().json(device),
+        Ok(Some(device)) => {
+            let mut device_obj = device.clone();
+            if let Some(product_id) = device.get("product_id").and_then(|v| v.as_i64()) {
+                match state.db.get_product(product_id).await {
+                    Ok(Some(product)) => {
+                        if let Some(obj) = device_obj.as_object_mut() {
+                            obj.insert(
+                                "product".to_string(),
+                                serde_json::to_value(&product).unwrap_or_default(),
+                            );
+                        }
+                    }
+                    Ok(None) => {
+                        if let Some(obj) = device_obj.as_object_mut() {
+                            obj.insert("product".to_string(), Value::Null);
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to fetch product {} for device {}: {}", product_id, udid, e);
+                        if let Some(obj) = device_obj.as_object_mut() {
+                            obj.insert("product".to_string(), Value::Null);
+                        }
+                    }
+                }
+            } else if let Some(obj) = device_obj.as_object_mut() {
+                obj.insert("product".to_string(), Value::Null);
+            }
+            HttpResponse::Ok().json(device_obj)
+        }
         Ok(None) => HttpResponse::NotFound().json(json!({"error": "Device not found"})),
         Err(e) => HttpResponse::InternalServerError().json(json!({"error": e})),
+    }
+}
+
+/// GET /devices/{udid}/edit → edit.html (device product association page)
+pub async fn edit_page(
+    state: web::Data<AppState>,
+    path: web::Path<String>,
+) -> HttpResponse {
+    let udid = path.into_inner();
+    if udid.is_empty() {
+        return HttpResponse::BadRequest().finish();
+    }
+
+    let mut ctx = tera::Context::new();
+    ctx.insert("Udid", &udid);
+
+    match state.tera.render("edit.html", &ctx) {
+        Ok(body) => HttpResponse::Ok().content_type("text/html").body(body),
+        Err(e) => HttpResponse::InternalServerError().body(format!("Template error: {}", e)),
+    }
+}
+
+/// PUT /devices/{udid}/product → save device-product association
+pub async fn update_device_product(
+    state: web::Data<AppState>,
+    path: web::Path<String>,
+    body: String,
+) -> HttpResponse {
+    let udid = path.into_inner();
+    if udid.is_empty() {
+        return HttpResponse::BadRequest().finish();
+    }
+
+    // Parse JSON body manually — edit.html's jQuery $.ajax sends JSON.stringify()
+    // without setting contentType: "application/json", so web::Json would reject it
+    let body: Value = match serde_json::from_str(&body) {
+        Ok(v) => v,
+        Err(_) => {
+            return HttpResponse::BadRequest().json(json!({"error": "Invalid JSON body"}));
+        }
+    };
+
+    // Extract product id from body
+    let product_id = match body.get("id").and_then(|v| v.as_i64()) {
+        Some(id) => id,
+        None => {
+            return HttpResponse::BadRequest().json(json!({"error": "Missing product id"}));
+        }
+    };
+
+    // Validate product exists
+    match state.db.get_product(product_id).await {
+        Ok(Some(_)) => {}
+        Ok(None) => {
+            return HttpResponse::NotFound().json(json!({"error": "Product not found"}));
+        }
+        Err(e) => {
+            return HttpResponse::InternalServerError()
+                .json(json!({"error": format!("Database error: {}", e)}));
+        }
+    }
+
+    // Update device's product_id and verify device exists
+    match state.db.update_device_product(&udid, product_id).await {
+        Ok(true) => HttpResponse::Ok().json(json!({"status": "success"})),
+        Ok(false) => HttpResponse::NotFound().json(json!({"error": "Device not found"})),
+        Err(e) => HttpResponse::InternalServerError()
+            .json(json!({"error": format!("Failed to update device product: {}", e)})),
+    }
+}
+
+/// GET /devices/{udid}/property → property.html (asset number page)
+pub async fn property_page(
+    state: web::Data<AppState>,
+    path: web::Path<String>,
+) -> HttpResponse {
+    let udid = path.into_inner();
+    if udid.is_empty() {
+        return HttpResponse::BadRequest().finish();
+    }
+
+    let phone_service = crate::services::phone_service::PhoneService::new(state.db.clone());
+    let current_property_id = match phone_service.query_info_by_udid(&udid).await {
+        Ok(Some(device)) => device
+            .get("property_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
+        Ok(None) => {
+            return HttpResponse::NotFound().json(json!({"error": "Device not found"}));
+        }
+        Err(e) => {
+            tracing::warn!("Failed to query device {}: {}", udid, e);
+            return HttpResponse::InternalServerError()
+                .json(json!({"error": format!("Database error: {}", e)}));
+        }
+    };
+
+    let mut ctx = tera::Context::new();
+    ctx.insert("Udid", &udid);
+    ctx.insert("CurrentPropertyId", &current_property_id);
+
+    match state.tera.render("property.html", &ctx) {
+        Ok(body) => HttpResponse::Ok().content_type("text/html").body(body),
+        Err(e) => HttpResponse::InternalServerError().body(format!("Template error: {}", e)),
+    }
+}
+
+/// GET /providers → providers.html (provider registry page)
+pub async fn providers_page(state: web::Data<AppState>) -> HttpResponse {
+    match state.tera.render("providers.html", &tera::Context::new()) {
+        Ok(body) => HttpResponse::Ok().content_type("text/html").body(body),
+        Err(e) => HttpResponse::InternalServerError().body(format!("Template error: {}", e)),
+    }
+}
+
+/// POST /api/v1/devices/{udid}/property → save asset/property number
+pub async fn update_device_property(
+    state: web::Data<AppState>,
+    path: web::Path<String>,
+    body: String,
+) -> HttpResponse {
+    let udid = path.into_inner();
+    if udid.is_empty() {
+        return HttpResponse::BadRequest().finish();
+    }
+
+    // Parse JSON body manually — jQuery $.ajax sends without Content-Type header
+    let body: Value = match serde_json::from_str(&body) {
+        Ok(v) => v,
+        Err(_) => {
+            return HttpResponse::BadRequest().json(json!({"error": "Invalid JSON body"}));
+        }
+    };
+
+    // Extract property_id — support both "property_id" and "id" fields
+    let property_id = body
+        .get("property_id")
+        .or_else(|| body.get("id"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim();
+
+    if property_id.is_empty() {
+        return HttpResponse::BadRequest().json(json!({"error": "Missing property_id"}));
+    }
+
+    if property_id.len() > 100 {
+        return HttpResponse::BadRequest()
+            .json(json!({"error": "property_id exceeds maximum length of 100 characters"}));
+    }
+
+    match state.db.update_device_property(&udid, property_id).await {
+        Ok(true) => HttpResponse::Ok().json(json!({"status": "success"})),
+        Ok(false) => HttpResponse::NotFound().json(json!({"error": "Device not found"})),
+        Err(e) => {
+            tracing::warn!("Failed to update property for device {}: {}", udid, e);
+            HttpResponse::InternalServerError()
+                .json(json!({"error": format!("Database error: {}", e)}))
+        }
     }
 }
 
@@ -1188,17 +1376,48 @@ pub async fn inspector_touch(
         (x, y, x2, y2, duration_ms)
     };
 
-    // Clamp coordinates to valid device display bounds (edge touches are valid intent)
+    // Validate coordinates against display bounds
     let max_x = (display_width - 1).max(0);
     let max_y = (display_height - 1).max(0);
-    if x < 0 || x > max_x || y < 0 || y > max_y || x2 < 0 || x2 > max_x || y2 < 0 || y2 > max_y {
-        tracing::debug!("[TOUCH] Clamping coords ({},{})→({},{}) to display {}x{}", x, y, x2, y2, display_width, display_height);
+
+    if x < 0 || x > max_x {
+        return HttpResponse::BadRequest().json(json!({
+            "status": "error",
+            "error": "ERR_INVALID_REQUEST",
+            "message": format!("X coordinate {} out of bounds (0-{})", x, max_x)
+        }));
     }
-    let x = x.max(0).min(max_x);
-    let y = y.max(0).min(max_y);
-    let x2 = x2.max(0).min(max_x);
-    let y2 = y2.max(0).min(max_y);
-    let duration_ms = if action == "swipe" { duration_ms.max(1) } else { duration_ms };
+    if y < 0 || y > max_y {
+        return HttpResponse::BadRequest().json(json!({
+            "status": "error",
+            "error": "ERR_INVALID_REQUEST",
+            "message": format!("Y coordinate {} out of bounds (0-{})", y, max_y)
+        }));
+    }
+
+    if action == "swipe" {
+        if x2 < 0 || x2 > max_x {
+            return HttpResponse::BadRequest().json(json!({
+                "status": "error",
+                "error": "ERR_INVALID_REQUEST",
+                "message": format!("X2 coordinate {} out of bounds (0-{})", x2, max_x)
+            }));
+        }
+        if y2 < 0 || y2 > max_y {
+            return HttpResponse::BadRequest().json(json!({
+                "status": "error",
+                "error": "ERR_INVALID_REQUEST",
+                "message": format!("Y2 coordinate {} out of bounds (0-{})", y2, max_y)
+            }));
+        }
+        if duration_ms <= 0 {
+            return HttpResponse::BadRequest().json(json!({
+                "status": "error",
+                "error": "ERR_INVALID_REQUEST",
+                "message": "Duration must be positive"
+            }));
+        }
+    }
 
     // Mock device
     if device.get("is_mock").and_then(|v| v.as_bool()).unwrap_or(false) {
@@ -1613,15 +1832,138 @@ pub async fn inspector_upload(
     HttpResponse::BadRequest().json(json!({"status":"error","message":"No file uploaded"}))
 }
 
+// ═══════════════ ROTATION ═══════════════
+
+/// POST /inspector/{udid}/rotation → fix device rotation via ATX agent
+pub async fn inspector_rotation(
+    state: web::Data<AppState>,
+    path: web::Path<String>,
+) -> HttpResponse {
+    let udid = path.into_inner();
+    if udid.is_empty() {
+        return HttpResponse::BadRequest().finish();
+    }
+
+    let (_device, client) = match get_device_client(&state, &udid).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+
+    // Forward rotation fix to device ATX agent
+    let url = format!("{}/info/rotation", client.base_url());
+    match client.http_client().post(&url).send().await {
+        Ok(resp) => {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            HttpResponse::build(actix_web::http::StatusCode::from_u16(status.as_u16()).unwrap_or(actix_web::http::StatusCode::OK))
+                .content_type("application/json")
+                .body(body)
+        }
+        Err(e) => {
+            tracing::warn!("[ROTATION] Failed for {}: {}", udid, e);
+            HttpResponse::InternalServerError().json(json!({"error": format!("rotation fix failed: {}", e)}))
+        }
+    }
+}
+
+// ═══════════════ INSPECTOR SHELL (HTTP) ═══════════════
+
+/// POST /inspector/{udid}/shell → execute shell command via HTTP proxy
+pub async fn inspector_shell(
+    state: web::Data<AppState>,
+    path: web::Path<String>,
+    form: web::Form<std::collections::HashMap<String, String>>,
+) -> HttpResponse {
+    let udid = path.into_inner();
+    if udid.is_empty() {
+        return HttpResponse::BadRequest().finish();
+    }
+
+    let command = form.get("command").cloned().unwrap_or_default();
+    if command.is_empty() {
+        return HttpResponse::BadRequest().json(json!({"error": "command is required"}));
+    }
+
+    // Safety checks
+    if is_dangerous_command(&command) {
+        return HttpResponse::Forbidden().json(json!({"error": "Command blocked for safety"}));
+    }
+    if has_dangerous_metacharacters(&command) {
+        return HttpResponse::Forbidden().json(json!({"error": "Command contains blocked shell metacharacters"}));
+    }
+
+    let (device, client) = match get_device_client(&state, &udid).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+
+    let serial = device.get("serial").and_then(|v| v.as_str()).unwrap_or("");
+
+    match client.shell_cmd(&command).await {
+        Ok(output) => HttpResponse::Ok().json(json!({"output": output})),
+        Err(_) if !serial.is_empty() => {
+            // ADB fallback
+            match Adb::shell(serial, &command).await {
+                Ok(output) => HttpResponse::Ok().json(json!({"output": output})),
+                Err(e) => HttpResponse::InternalServerError().json(json!({"error": format!("{}", e)})),
+            }
+        }
+        Err(e) => HttpResponse::InternalServerError().json(json!({"error": format!("{}", e)})),
+    }
+}
+
+/// GET /inspector/{udid}/shell → execute shell command via HTTP proxy (GET variant for legacy support)
+pub async fn inspector_shell_get(
+    state: web::Data<AppState>,
+    path: web::Path<String>,
+    query: web::Query<std::collections::HashMap<String, String>>,
+) -> HttpResponse {
+    let udid = path.into_inner();
+    if udid.is_empty() {
+        return HttpResponse::BadRequest().finish();
+    }
+
+    let command = query.get("command").cloned().unwrap_or_default();
+    if command.is_empty() {
+        return HttpResponse::BadRequest().json(json!({"error": "command is required"}));
+    }
+
+    if is_dangerous_command(&command) {
+        return HttpResponse::Forbidden().json(json!({"error": "Command blocked for safety"}));
+    }
+    if has_dangerous_metacharacters(&command) {
+        return HttpResponse::Forbidden().json(json!({"error": "Command contains blocked shell metacharacters"}));
+    }
+
+    let (device, client) = match get_device_client(&state, &udid).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+
+    let serial = device.get("serial").and_then(|v| v.as_str()).unwrap_or("");
+
+    match client.shell_cmd(&command).await {
+        Ok(output) => HttpResponse::Ok().json(json!({"output": output})),
+        Err(_) if !serial.is_empty() => {
+            match Adb::shell(serial, &command).await {
+                Ok(output) => HttpResponse::Ok().json(json!({"output": output})),
+                Err(e) => HttpResponse::InternalServerError().json(json!({"error": format!("{}", e)})),
+            }
+        }
+        Err(e) => HttpResponse::InternalServerError().json(json!({"error": format!("{}", e)})),
+    }
+}
+
 /// POST /upload → upload file with chmod + apk install
 pub async fn store_file_handler(
     state: web::Data<AppState>,
     req: HttpRequest,
     mut payload: Multipart,
 ) -> HttpResponse {
+    // Extract device UDID from custom header (Story 12-5: semantic correctness)
     let udid = req
         .headers()
-        .get("Access-Control-Allow-Origin")
+        .get("X-Device-UDID")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
 
@@ -1877,9 +2219,10 @@ pub async fn shell(
     req: HttpRequest,
     form: web::Form<std::collections::HashMap<String, String>>,
 ) -> HttpResponse {
+    // Extract device UDID from custom header (Story 12-5: semantic correctness)
     let udid = req
         .headers()
-        .get("Access-Control-Allow-Origin")
+        .get("X-Device-UDID")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
 
@@ -2793,33 +3136,93 @@ pub async fn feeds(req: HttpRequest, stream: web::Payload) -> HttpResponse {
     }
 }
 
-/// GET /devices/{query}/reserved → legacy WebSocket heartbeat
+/// GET /devices/{udid}/reserved → WebSocket device reservation (Story 10-2)
 pub async fn reserved(
     req: HttpRequest,
     stream: web::Payload,
-    _path: web::Path<String>,
+    state: web::Data<AppState>,
+    path: web::Path<String>,
 ) -> HttpResponse {
+    let udid = path.into_inner();
+
+    // Validate device exists in database
+    match state.db.find_by_udid(&udid).await {
+        Ok(Some(_)) => {}
+        Ok(None) => {
+            return HttpResponse::NotFound().json(json!({
+                "status": "error",
+                "error": "ERR_DEVICE_NOT_FOUND",
+                "message": format!("Device {} not found", udid)
+            }));
+        }
+        Err(e) => {
+            tracing::warn!("[RESERVED] Database error looking up device {}: {}", udid, e);
+            return HttpResponse::InternalServerError().json(json!({
+                "status": "error",
+                "error": "ERR_OPERATION_FAILED",
+                "message": "Database error"
+            }));
+        }
+    }
+
+    // Upgrade to WebSocket
     match actix_ws::handle(&req, stream) {
         Ok((resp, mut session, mut msg_stream)) => {
+            // Atomically check and reserve using entry() to prevent TOCTOU race
+            let remote_addr = req
+                .peer_addr()
+                .map(|a| a.to_string())
+                .unwrap_or_default();
+            match state.reserved_devices.entry(udid.clone()) {
+                dashmap::mapref::entry::Entry::Occupied(_) => {
+                    let _ = session
+                        .text(json!({"error": "Device already reserved"}).to_string())
+                        .await;
+                    let _ = session.close(None).await;
+                    return resp;
+                }
+                dashmap::mapref::entry::Entry::Vacant(entry) => {
+                    entry.insert(remote_addr);
+                }
+            }
+            if let Err(e) = state.db.update(&udid, &json!({"using": true})).await {
+                tracing::warn!("[RESERVED] Failed to set using_device=true for {}: {}", udid, e);
+            }
+
+            tracing::info!("[RESERVED] Device {} reserved", udid);
+
+            // Spawn message handler with cleanup on disconnect
+            let db = state.db.clone();
+            let reserved = state.reserved_devices.clone();
+            let udid_clone = udid.clone();
             actix_web::rt::spawn(async move {
                 while let Some(Ok(msg)) = msg_stream.next().await {
                     match msg {
-                        actix_ws::Message::Text(text) => {
-                            let _ = session
-                                .text(format!("Hello, {}", text))
-                                .await;
+                        actix_ws::Message::Text(_) => {
+                            let _ = session.text("pong").await;
                         }
-                        actix_ws::Message::Binary(data) => {
-                            let _ = session.binary(data).await;
+                        actix_ws::Message::Ping(data) => {
+                            let _ = session.pong(&data).await;
                         }
                         actix_ws::Message::Close(_) => break,
                         _ => {}
                     }
                 }
+                // Cleanup: release reservation on disconnect
+                reserved.remove(&udid_clone);
+                if let Err(e) = db.update(&udid_clone, &json!({"using": false})).await {
+                    tracing::warn!("[RESERVED] Failed to set using_device=false for {}: {}", udid_clone, e);
+                }
+                tracing::info!("[RESERVED] Device {} released", udid_clone);
             });
+
             resp
         }
-        Err(_) => HttpResponse::InternalServerError().finish(),
+        Err(_) => HttpResponse::InternalServerError().json(json!({
+            "status": "error",
+            "error": "ERR_WEBSOCKET_UPGRADE_FAILED",
+            "message": "WebSocket upgrade failed"
+        })),
     }
 }
 

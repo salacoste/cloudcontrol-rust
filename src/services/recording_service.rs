@@ -9,15 +9,28 @@ use sqlx::Row;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use tokio::task::JoinHandle;
 
 /// Recording state management for active recording sessions.
 /// Maps device_udid -> recording_id
-#[derive(Default)]
 pub struct RecordingStateInner {
     active_recordings: HashMap<String, i64>,
     paused_recordings: HashSet<String>,
     /// Playback state: device_udid -> PlaybackSession
     playback_sessions: HashMap<String, PlaybackSession>,
+    /// Background playback task handles: device_udid -> JoinHandle
+    playback_handles: HashMap<String, JoinHandle<()>>,
+}
+
+impl Default for RecordingStateInner {
+    fn default() -> Self {
+        Self {
+            active_recordings: HashMap::new(),
+            paused_recordings: HashSet::new(),
+            playback_sessions: HashMap::new(),
+            playback_handles: HashMap::new(),
+        }
+    }
 }
 
 /// Represents an active playback session for a device
@@ -145,9 +158,12 @@ impl RecordingState {
         Ok(())
     }
 
-    /// Stop playback for a device
+    /// Stop playback for a device. Aborts the background task if tracked.
     pub async fn stop_playback(&self, target_device_udid: &str) -> Option<PlaybackSession> {
         let mut state = self.inner.write().await;
+        if let Some(handle) = state.playback_handles.remove(target_device_udid) {
+            handle.abort();
+        }
         state.playback_sessions.remove(target_device_udid)
     }
 
@@ -195,11 +211,13 @@ impl RecordingState {
         }
     }
 
-    /// Mark playback as completed
+    /// Mark playback as completed. Removes the task handle (task self-completed).
     pub async fn complete_playback(&self, target_device_udid: &str) -> Result<(), String> {
         let mut state = self.inner.write().await;
         if let Some(session) = state.playback_sessions.get_mut(target_device_udid) {
             session.status = PlaybackStatus::Completed;
+            // Task completed naturally — remove handle without aborting
+            state.playback_handles.remove(target_device_udid);
             Ok(())
         } else {
             Err("ERR_NO_ACTIVE_PLAYBACK".to_string())
@@ -209,6 +227,23 @@ impl RecordingState {
     /// Check if device has active playback
     pub async fn is_playing(&self, target_device_udid: &str) -> bool {
         self.inner.read().await.playback_sessions.contains_key(target_device_udid)
+    }
+
+    /// Store the background task handle for a playback session.
+    pub async fn store_playback_handle(&self, target_device_udid: &str, handle: JoinHandle<()>) {
+        let mut state = self.inner.write().await;
+        state.playback_handles.insert(target_device_udid.to_string(), handle);
+    }
+
+    /// Stop all active playback sessions and abort their background tasks. Used during graceful shutdown.
+    pub async fn stop_all_playbacks(&self) -> usize {
+        let mut state = self.inner.write().await;
+        let count = state.playback_sessions.len();
+        for (_udid, handle) in state.playback_handles.drain() {
+            handle.abort();
+        }
+        state.playback_sessions.clear();
+        count
     }
 }
 
@@ -839,5 +874,42 @@ impl RecordingService {
     /// Mark playback as completed.
     pub async fn mark_playback_complete(&self, target_device_udid: &str) -> Result<(), String> {
         self.recording_state.complete_playback(target_device_udid).await
+    }
+
+    /// Store the background task handle for a playback session.
+    pub async fn store_playback_handle(&self, target_device_udid: &str, handle: JoinHandle<()>) {
+        self.recording_state.store_playback_handle(target_device_udid, handle).await;
+    }
+
+    /// Stop all active playback sessions and abort background tasks. Used during graceful shutdown.
+    pub async fn stop_all_playbacks(&self) {
+        let count = self.recording_state.stop_all_playbacks().await;
+        tracing::info!("[RecordingService] Stopped {} playback sessions during shutdown", count);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_recording_state_stop_all_playbacks_empty() {
+        let state = RecordingState::new();
+        let count = state.stop_all_playbacks().await;
+        assert_eq!(count, 0);
+    }
+
+    #[tokio::test]
+    async fn test_recording_state_stop_all_playbacks_with_sessions() {
+        let state = RecordingState::new();
+        state.start_playback("device-1", 1, 1.0).await.unwrap();
+        state.start_playback("device-2", 2, 2.0).await.unwrap();
+        assert!(state.is_playing("device-1").await);
+        assert!(state.is_playing("device-2").await);
+
+        let count = state.stop_all_playbacks().await;
+        assert_eq!(count, 2);
+        assert!(!state.is_playing("device-1").await);
+        assert!(!state.is_playing("device-2").await);
     }
 }

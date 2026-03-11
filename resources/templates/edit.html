@@ -13,7 +13,7 @@
 </head>
 
 <body>
-  <div id="app">
+  {% raw %}<div id="app">
     <h1>
       <a href="/"><i class="fa fa-arrow-left"></i></a> Edit Device Info</h1>
     <div>
@@ -47,9 +47,10 @@
       <button class="btn btn-default" @click.prevent="updateAndBack">Update & Return Home</button> {{message}}
     </div>
   </div>
+  {% endraw %}
 
   <script>
-    var udid = "[[.]]"; // device udid
+    var udid = "{{ Udid }}"; // device udid
 
     new Vue({
       el: "#app",

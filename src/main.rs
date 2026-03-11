@@ -1,6 +1,7 @@
 use cloudcontrol::config;
 use cloudcontrol::db;
 use cloudcontrol::error;
+use cloudcontrol::middleware;
 use cloudcontrol::pool;
 use cloudcontrol::routes;
 use cloudcontrol::services;
@@ -10,10 +11,50 @@ use cloudcontrol::utils;
 use actix_files as fs;
 use actix_web::middleware::ErrorHandlers;
 use actix_web::{web, App, HttpServer};
+use clap::Parser;
+use std::sync::Arc;
 use std::time::Duration;
+
+/// CloudControl server - WiFi-based mobile device group control and monitoring platform
+#[derive(Parser)]
+#[command(name = "cloudcontrol")]
+#[command(version, about, long_about = None)]
+struct CliArgs {
+    /// Path to configuration file (YAML format)
+    #[arg(short, long, value_name = "FILE")]
+    config: Option<String>,
+}
+
+/// Resolve config path with priority: CLI > ENV > default.
+/// Uses eprintln! before tracing is initialized for boot debugging (Code Review Issue #4).
+/// Supports tilde expansion for home directory paths (Code Review Issue #3).
+fn resolve_config_path(args: &CliArgs) -> String {
+    let raw_path = if let Some(path) = &args.config {
+        eprintln!("[Config] Using CLI config path: {}", path);
+        path.clone()
+    } else if let Ok(path) = std::env::var("CONFIG_PATH") {
+        eprintln!("[Config] Using CONFIG_PATH env: {}", path);
+        path
+    } else {
+        eprintln!("[Config] Using default config path: config/default_dev.yaml");
+        "config/default_dev.yaml".to_string()
+    };
+
+    // Expand tilde (~) to home directory (Code Review Issue #3)
+    if raw_path.starts_with("~/") {
+        if let Some(home) = std::env::var("HOME").ok() {
+            return format!("{}{}", home, &raw_path[1..]);
+        }
+    }
+    raw_path
+}
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
+    // ── Parse CLI args BEFORE logging init (Story 12-4) ──
+    let args = CliArgs::parse();
+    let config_path = resolve_config_path(&args);
+
     // ── Initialize logging ──
     let file_appender = tracing_appender::rolling::daily("log", "app.log");
     let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
@@ -30,9 +71,14 @@ async fn main() -> std::io::Result<()> {
 
     tracing::info!("CloudControl Rust starting...");
 
-    // ── Load configuration ──
-    let config = config::AppConfig::load("config/default_dev.yaml")
-        .expect("Failed to load configuration");
+    // ── Load configuration (Story 12-4: configurable path) ──
+    // Note: eprintln! already logged path above for pre-tracing debugging (Issue #4)
+    tracing::info!("[Config] Loading from: {}", config_path);
+    let config = config::AppConfig::load(&config_path)
+        .unwrap_or_else(|e| {
+            tracing::error!("[Config] Failed to load: {}", e);
+            panic!("Failed to load configuration from '{}': {}", config_path, e);
+        });
     let port = config.server.port;
 
     // ── Initialize database ──
@@ -48,10 +94,17 @@ async fn main() -> std::io::Result<()> {
         .expect("Failed to restore devices");
     tracing::info!("Database initialized, device state restored");
 
-    // ── Initialize connection pool ──
+    // ── Initialize connection pool (Story 12-4: configurable settings) ──
+    let pool_max_size = config.pool.max_size;
+    let pool_idle_timeout = Duration::from_secs(config.pool.idle_timeout_secs);
+    tracing::info!(
+        "[Pool] Initializing: max_size={}, idle_timeout={}s",
+        pool_max_size,
+        config.pool.idle_timeout_secs
+    );
     let connection_pool = pool::connection_pool::ConnectionPool::new(
-        1200,
-        Duration::from_secs(600),
+        pool_max_size,
+        pool_idle_timeout,
     );
 
     // ── Load templates ──
@@ -64,7 +117,7 @@ async fn main() -> std::io::Result<()> {
     tracing::info!("Host IP: {}", host_ip);
 
     // ── Build shared state ──
-    let app_state = state::AppState::new(
+    let mut app_state = state::AppState::new(
         db.clone(),
         config.clone(),
         connection_pool,
@@ -72,25 +125,64 @@ async fn main() -> std::io::Result<()> {
         host_ip,
     );
 
+    // ── Check FFmpeg availability (Story 11-1) ──
+    app_state.ffmpeg_available = services::video_service::check_ffmpeg_available().await;
+
+    // ── Video recording startup recovery (Story 11-2) ──
+    if let Err(e) = app_state.video_service.recover_on_startup().await {
+        tracing::warn!("Video recovery on startup failed: {}", e);
+    }
+
     // ── Start device detector ──
-    let detector = services::device_detector::DeviceDetector::new(phone_service.clone());
+    let detector = Arc::new(services::device_detector::DeviceDetector::new(phone_service.clone()));
     detector.start().await;
     tracing::info!("USB device auto-detection started");
 
     // ── Start WiFi discovery ──
-    let wifi_discovery = services::wifi_discovery::WifiDiscovery::new(phone_service.clone());
+    let wifi_discovery = Arc::new(services::wifi_discovery::WifiDiscovery::new(phone_service.clone()));
     wifi_discovery.start().await;
     tracing::info!("WiFi device auto-discovery started");
+
+    // ── Log auth status (Story 12-1) ──
+    if app_state.api_key_enabled {
+        tracing::info!("API authentication enabled");
+    } else {
+        tracing::warn!("API authentication disabled — all endpoints are open");
+    }
+
+    // ── Create rate limiter (Story 12-2) ──
+    let rate_limiter = app_state.config.rate_limit.as_ref().map(|cfg| {
+        Arc::new(middleware::RateLimiter::new(cfg.clone()))
+    });
+    if app_state.rate_limiting_enabled {
+        let cfg = app_state.config.rate_limit.as_ref().unwrap();
+        tracing::info!(
+            "Rate limiting enabled: {} req/{} sec per IP",
+            cfg.requests_per_window,
+            cfg.window_secs
+        );
+    } else {
+        tracing::info!("Rate limiting disabled");
+    }
+
+    // ── Clone service refs for shutdown handler (Story 12-3) ──
+    let scrcpy_ref = app_state.scrcpy_manager.clone();
+    let video_ref = app_state.video_service.clone();
+    let recording_ref = app_state.recording_service.clone();
 
     // ── Start HTTP server ──
     tracing::info!("Starting server on http://0.0.0.0:{}", port);
 
     let tera_data = web::Data::new(tera);
 
-    HttpServer::new(move || {
+    let server = HttpServer::new(move || {
         App::new()
             .app_data(web::Data::new(app_state.clone()))
             .app_data(tera_data.clone())
+            // Rate limiting middleware (Story 12-2) — runs after auth
+            .wrap(middleware::RateLimit::new(rate_limiter.clone()))
+            // API key authentication middleware (Story 12-1) — runs first
+            .wrap(middleware::ApiKeyAuth::new(app_state.config.api_key.clone()))
             // Error handlers for 404/500
             .wrap(
                 ErrorHandlers::new()
@@ -112,11 +204,32 @@ async fn main() -> std::io::Result<()> {
                 "/installfile",
                 web::get().to(routes::control::installfile),
             )
+            .route("/test", web::get().to(routes::control::test_page))
             // ── Device API ──
             .route("/list", web::get().to(routes::control::device_list))
             .route(
                 "/devices/{udid}/info",
                 web::get().to(routes::control::device_info),
+            )
+            .route(
+                "/devices/{udid}/edit",
+                web::get().to(routes::control::edit_page),
+            )
+            .route(
+                "/devices/{udid}/product",
+                web::put().to(routes::control::update_device_product),
+            )
+            .route(
+                "/devices/{udid}/property",
+                web::get().to(routes::control::property_page),
+            )
+            .route(
+                "/api/v1/devices/{udid}/property",
+                web::post().to(routes::control::update_device_property),
+            )
+            .route(
+                "/providers",
+                web::get().to(routes::control::providers_page),
             )
             // ── Screenshot ──
             .route(
@@ -166,6 +279,20 @@ async fn main() -> std::io::Result<()> {
             .route(
                 "/inspector/{udid}/upload",
                 web::post().to(routes::control::inspector_upload),
+            )
+            // ── Rotation ──
+            .route(
+                "/inspector/{udid}/rotation",
+                web::post().to(routes::control::inspector_rotation),
+            )
+            // ── Inspector Shell (HTTP proxy) ──
+            .route(
+                "/inspector/{udid}/shell",
+                web::post().to(routes::control::inspector_shell),
+            )
+            .route(
+                "/inspector/{udid}/shell",
+                web::get().to(routes::control::inspector_shell_get),
             )
             .route("/upload", web::post().to(routes::control::store_file_handler))
             .route(
@@ -268,10 +395,35 @@ async fn main() -> std::io::Result<()> {
             .route("/api/v1/batch/swipe", web::post().to(routes::api_v1::batch_swipe))
             .route("/api/v1/batch/input", web::post().to(routes::api_v1::batch_input))
             .route("/api/v1/openapi.json", web::get().to(routes::api_v1::openapi_spec))
+            .route("/api/v1/version", web::get().to(routes::api_v1::get_version))
             // ── API V1 Status & Health Endpoints (Story 5-3) ──
             .route("/api/v1/status", web::get().to(routes::api_v1::get_device_status))
             .route("/api/v1/health", web::get().to(routes::api_v1::health_check))
             .route("/api/v1/metrics", web::get().to(routes::api_v1::get_metrics))
+            // ── Product Catalog API ──
+            .route("/api/v1/products", web::get().to(routes::api_v1::list_products))
+            .route("/api/v1/products", web::post().to(routes::api_v1::create_product))
+            .route("/api/v1/products/{id}", web::get().to(routes::api_v1::get_product))
+            .route("/api/v1/products/{id}", web::put().to(routes::api_v1::update_product))
+            .route("/api/v1/products/{id}", web::delete().to(routes::api_v1::delete_product))
+            // ── Provider Registry API ──
+            .route("/api/v1/providers", web::get().to(routes::api_v1::list_providers))
+            .route("/api/v1/providers", web::post().to(routes::api_v1::create_provider))
+            .route("/api/v1/providers/{id}", web::get().to(routes::api_v1::get_provider))
+            .route("/api/v1/providers/{id}", web::put().to(routes::api_v1::update_provider))
+            .route("/api/v1/providers/{id}/heartbeat", web::post().to(routes::api_v1::provider_heartbeat))
+            // ── Hierarchy, Upload, Rotation (Story 10-4) ──
+            .route("/api/v1/devices/{udid}/hierarchy", web::get().to(routes::api_v1::hierarchy))
+            .route("/api/v1/devices/{udid}/upload", web::post().to(routes::api_v1::upload))
+            .route("/api/v1/devices/{udid}/rotation", web::post().to(routes::api_v1::rotation))
+            // ── Video Recording (Story 11-1) ──
+            .route("/api/v1/videos", web::get().to(routes::api_v1::list_videos))
+            .route("/api/v1/videos/{id}", web::get().to(routes::api_v1::get_video))
+            .route("/api/v1/videos/{id}/download", web::get().to(routes::api_v1::download_video))
+            .route("/api/v1/videos/{id}", web::delete().to(routes::api_v1::delete_video))
+            .route("/api/v1/videos/{id}/stop", web::post().to(routes::api_v1::stop_video))
+            // Legacy endpoint for edit.html compatibility (Story 8.2)
+            .route("/products/{brand}/{model}", web::get().to(routes::api_v1::list_products_by_brand_model))
             // ── API V1 WebSocket Endpoints ──
             .route(
                 "/api/v1/ws/screenshot/{udid}",
@@ -348,6 +500,8 @@ async fn main() -> std::io::Result<()> {
                 web::get().to(routes::nio::nio_websocket),
             )
             .route("/nio/stats", web::get().to(routes::nio::nio_stats))
+            // ── Video Recording WebSocket (Story 11-1) ──
+            .route("/video/convert", web::get().to(routes::video_ws::video_convert_ws))
             // ── Scrcpy WebSocket ──
             .route(
                 "/scrcpy/{udid}/ws",
@@ -411,7 +565,135 @@ async fn main() -> std::io::Result<()> {
             // ── Static files ──
             .service(fs::Files::new("/static", "resources/static").show_files_listing())
     })
+    .shutdown_timeout(10)
     .bind(format!("0.0.0.0:{}", port))?
-    .run()
-    .await
+    .run();
+
+    let server_handle = server.handle();
+
+    // ── Spawn shutdown signal listener (Story 12-3) ──
+    let detector_ref = detector.clone();
+    let wifi_ref = wifi_discovery.clone();
+
+    tokio::spawn(async move {
+        shutdown_signal().await;
+        tracing::info!("[Shutdown] Signal received, beginning graceful shutdown...");
+
+        // Second signal = force exit immediately
+        tokio::spawn(async {
+            shutdown_signal().await;
+            tracing::warn!("[Shutdown] Second signal received, forcing immediate exit");
+            std::process::exit(1);
+        });
+
+        let cleanup = async {
+            wifi_ref.stop().await;
+            tracing::info!("[Shutdown] WiFi discovery stopped");
+
+            detector_ref.stop().await;
+            tracing::info!("[Shutdown] Device detector stopped");
+
+            scrcpy_ref.stop_all_sessions().await;
+            tracing::info!("[Shutdown] Scrcpy sessions stopped");
+
+            video_ref.stop_all_active().await;
+            tracing::info!("[Shutdown] Video recordings stopped");
+
+            recording_ref.stop_all_playbacks().await;
+            tracing::info!("[Shutdown] Playbacks stopped");
+
+            server_handle.stop(true).await;
+            tracing::info!("[Shutdown] HTTP server stopped");
+        };
+
+        if tokio::time::timeout(Duration::from_secs(10), cleanup)
+            .await
+            .is_err()
+        {
+            tracing::error!("[Shutdown] Cleanup timed out after 10s, forcing exit");
+            std::process::exit(1);
+        }
+        tracing::info!("[Shutdown] Clean shutdown complete");
+    });
+
+    server.await
+}
+
+/// Wait for SIGINT (Ctrl+C) or SIGTERM shutdown signal.
+async fn shutdown_signal() {
+    let ctrl_c = tokio::signal::ctrl_c();
+
+    #[cfg(unix)]
+    {
+        let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("Failed to install SIGTERM handler");
+
+        tokio::select! {
+            _ = ctrl_c => {},
+            _ = sigterm.recv() => {},
+        }
+    }
+
+    #[cfg(not(unix))]
+    {
+        ctrl_c.await.ok();
+    }
+}
+
+// ── Tests for CLI parsing and path resolution (Code Review Issue #6) ──
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_resolve_config_path_cli_arg() {
+        let args = CliArgs {
+            config: Some("/custom/config.yaml".to_string()),
+        };
+        let path = resolve_config_path(&args);
+        assert_eq!(path, "/custom/config.yaml");
+    }
+
+    #[test]
+    fn test_resolve_config_path_tilde_expansion() {
+        // Test that ~/ is expanded to $HOME
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/home/user".to_string());
+        let args = CliArgs {
+            config: Some("~/my-config.yaml".to_string()),
+        };
+        let path = resolve_config_path(&args);
+        assert_eq!(path, format!("{}/my-config.yaml", home));
+        assert!(!path.contains("~"));
+    }
+
+    #[test]
+    fn test_resolve_config_path_tilde_expansion_trailing() {
+        // Test edge case: just ~ with no trailing slash
+        let args = CliArgs {
+            config: Some("~".to_string()),
+        };
+        let path = resolve_config_path(&args);
+        // Should not expand since it's just "~" not "~/"
+        assert_eq!(path, "~");
+    }
+
+    #[test]
+    fn test_resolve_config_path_no_expansion_for_relative() {
+        // Test that relative paths are not modified
+        let args = CliArgs {
+            config: Some("config/local.yaml".to_string()),
+        };
+        let path = resolve_config_path(&args);
+        assert_eq!(path, "config/local.yaml");
+    }
+
+    #[test]
+    fn test_resolve_config_path_no_expansion_for_absolute() {
+        // Test that absolute paths are not modified
+        let args = CliArgs {
+            config: Some("/etc/cloudcontrol/config.yaml".to_string()),
+        };
+        let path = resolve_config_path(&args);
+        assert_eq!(path, "/etc/cloudcontrol/config.yaml");
+    }
 }

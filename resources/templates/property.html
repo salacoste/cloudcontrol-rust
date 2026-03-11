@@ -12,8 +12,6 @@
 
   <script src="https://cdn.jsdelivr.net/npm/jquery@3.2.1/dist/jquery.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@3.3.7/dist/js/bootstrap.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/vue@2.5.3/dist/vue.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/moment@2.20.1/moment.min.js"></script>
   <style>
 
   </style>
@@ -21,11 +19,11 @@
 
 <body>
   <div class="container-fluid">
-    <form class="form" method="post" action="/property">
-      <h2>Edit Asset Number</h2>
+    <form class="form" id="propertyForm">
+      <h2><a href="/"><i class="fa fa-arrow-left"></i></a> Edit Asset Number</h2>
       <div class="form-group">
         <label>Current Number</label>
-        <input class="form-control" type="text" disabled=true value="[[.]]">
+        <input class="form-control" type="text" disabled=true value="{{ CurrentPropertyId }}">
       </div>
       <div class="form-group">
         <label>New Number</label>
@@ -37,9 +35,39 @@
           <input class="form-control" type="number" name="id_number" autofocus="autofocus">
         </div>
       </div>
-      <button class="btn btn-default">Submit</button>
+      <button class="btn btn-default" type="submit">Submit</button>
+      <span id="message"></span>
     </form>
   </div>
+
+  <script>
+    var udid = "{{ Udid }}";
+
+    document.getElementById('propertyForm').addEventListener('submit', function(e) {
+      e.preventDefault();
+      var fullId = document.querySelector('input[name="id"]').value.trim();
+      var numId = document.querySelector('input[name="id_number"]').value.trim();
+      var propertyId = fullId || (numId ? 'HIH-PHO-' + numId : '');
+
+      if (!propertyId) {
+        document.getElementById('message').textContent = 'Please enter an asset number';
+        return;
+      }
+
+      document.getElementById('message').textContent = 'Saving...';
+
+      $.ajax({
+        url: '/api/v1/devices/' + udid + '/property',
+        method: 'POST',
+        data: JSON.stringify({property_id: propertyId}),
+      }).then(function(ret) {
+        document.getElementById('message').textContent = 'Saved!';
+        window.location = '/';
+      }).fail(function(err) {
+        document.getElementById('message').textContent = 'Error: ' + (err.responseJSON ? err.responseJSON.error : 'Unknown');
+      });
+    });
+  </script>
 </body>
 
 </html>

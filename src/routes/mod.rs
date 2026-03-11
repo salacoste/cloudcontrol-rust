@@ -5,3 +5,4 @@ pub mod nio;
 pub mod recording;
 pub mod scrcpy;
 pub mod scrcpy_ws;
+pub mod video_ws;

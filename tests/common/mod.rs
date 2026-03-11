@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use cloudcontrol::config::{AppConfig, DbConfig, ServerConfig};
+use cloudcontrol::config::{AppConfig, CacheConfig, DbConfig, PoolConfig, RateLimitConfig, ServerConfig};
 use cloudcontrol::db::Database;
 use cloudcontrol::pool::connection_pool::ConnectionPool;
 use cloudcontrol::state::AppState;
@@ -41,7 +41,7 @@ pub fn make_device_json(udid: &str, present: bool, is_mock: bool) -> Value {
     })
 }
 
-/// Create a test AppConfig with defaults.
+/// Create a test AppConfig with defaults (Story 12-4: updated structure).
 pub fn make_test_config() -> AppConfig {
     AppConfig {
         server: ServerConfig { port: 8000 },
@@ -52,13 +52,50 @@ pub fn make_test_config() -> AppConfig {
             passwd: None,
             db_name1: None,
         },
-        descption: None,
-        redis_configs: None,
-        kafka_configs: None,
-        rest_server_configs: None,
-        influxdb_configs: None,
-        spider: None,
+        description: None,
+        pool: PoolConfig::default(),
+        cache: CacheConfig::default(),
+        api_key: None,
+        rate_limit: None,
     }
+}
+
+/// Create a test AppConfig with API key authentication enabled.
+pub fn make_test_config_with_auth(api_key: &str) -> AppConfig {
+    let mut config = make_test_config();
+    config.api_key = Some(api_key.to_string());
+    config
+}
+
+/// Create a test AppConfig with rate limiting enabled.
+pub fn make_test_config_with_rate_limit(requests_per_window: u32, window_secs: u64) -> AppConfig {
+    let mut config = make_test_config();
+    config.rate_limit = Some(RateLimitConfig {
+        requests_per_window,
+        window_secs,
+        category_limits: std::collections::HashMap::new(),
+    });
+    config
+}
+
+/// Create a test AppConfig with custom pool settings (Story 12-4).
+pub fn make_test_config_with_pool(max_size: u64, idle_timeout_secs: u64) -> AppConfig {
+    let mut config = make_test_config();
+    config.pool = PoolConfig {
+        max_size,
+        idle_timeout_secs,
+    };
+    config
+}
+
+/// Create a test AppConfig with custom cache settings (Story 12-4).
+pub fn make_test_config_with_cache(device_info_max: u64, device_info_ttl_secs: u64) -> AppConfig {
+    let mut config = make_test_config();
+    config.cache = CacheConfig {
+        device_info_max,
+        device_info_ttl_secs,
+    };
+    config
 }
 
 /// Create a complete test AppState with a temporary database.

@@ -2,6 +2,7 @@ pub mod config;
 pub mod db;
 pub mod device;
 pub mod error;
+pub mod middleware;
 pub mod models;
 pub mod pool;
 pub mod routes;

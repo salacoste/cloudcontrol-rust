@@ -1365,8 +1365,7 @@
 <script>
     // Server-provided data
     var deviceList = {{ list | safe }};
-    var deviceIp = "{{ IP }}";
-    var devicePort = "{{ Port }}";
+    // deviceIp/devicePort removed — all device calls proxied through server
     var deviceUdid = "{{ Udid }}";
     var screenWidth = "{{ Width }}";
     var screenHeight = "{{ Height }}";
@@ -1376,13 +1375,9 @@
 window.app = new Vue({
     el: '#app',
     data: {
-        deviceIp: deviceIp,
         deviceList: [],
         deviceUdid: deviceUdid,
-        device: {
-            ip: deviceIp,
-            port: 7912,
-        },
+        device: {},
         deviceInfo: {},
         viewMode: 'normal',
         selectedDevice: null,
@@ -1445,9 +1440,7 @@ window.app = new Vue({
         }
     },
     computed: {
-        deviceUrl: function() {
-            return "http://" + this.device.ip + ":" + this.device.port;
-        },
+        // deviceUrl removed — all calls proxied through server via /inspector/{udid}/...
         timingBars: function() {
             var t = this.timingWaterfall;
             var total = Math.max(t.total, 1);
@@ -1495,13 +1488,13 @@ window.app = new Vue({
         // Initialize drag resizer
         this.initResizer();
 
-        // Get device info
+        // Get device info (via server proxy, not direct to device)
         $.ajax({
-            url: this.deviceUrl + "/info",
+            url: "/devices/" + this.deviceUdid + "/info",
             dataType: "json"
         }).then(function(ret) {
             self.deviceInfo = ret;
-            document.title = 'CloudControl - ' + ret.model;
+            document.title = 'CloudControl - ' + (ret.model || 'Device');
         });
 
         // Start screen stream and touch control

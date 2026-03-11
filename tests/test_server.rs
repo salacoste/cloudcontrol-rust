@@ -4,7 +4,8 @@ use actix_web::{test, web, App};
 use cloudcontrol::pool::connection_pool::ConnectionPool;
 use cloudcontrol::routes;
 use cloudcontrol::state::AppState;
-use common::{create_temp_db, make_device_json, make_test_config};
+use cloudcontrol::middleware;
+use common::{create_temp_db, make_device_json, make_test_config, make_test_config_with_auth, make_test_config_with_rate_limit};
 use serde_json::{json, Value};
 use std::time::Duration;
 
@@ -73,6 +74,8 @@ macro_rules! setup_test_app {
                 .route("/api/v1/status", web::get().to(routes::api_v1::get_device_status))
                 .route("/api/v1/health", web::get().to(routes::api_v1::health_check))
                 .route("/api/v1/metrics", web::get().to(routes::api_v1::get_metrics))
+                // API V1 Version (Story 10-1)
+                .route("/api/v1/version", web::get().to(routes::api_v1::get_version))
                 // API V1 OpenAPI spec (Story 5-4)
                 .route("/api/v1/openapi.json", web::get().to(routes::api_v1::openapi_spec))
                 // API V1 JSON-RPC WebSocket (Story 5-5)
@@ -97,7 +100,57 @@ macro_rules! setup_test_app {
                 .route("/scrcpy/recordings", web::get().to(routes::scrcpy::list_scrcpy_recordings))
                 .route("/scrcpy/recordings/{id}", web::get().to(routes::scrcpy::get_scrcpy_recording))
                 .route("/scrcpy/recordings/{id}/download", web::get().to(routes::scrcpy::download_scrcpy_recording))
-                .route("/scrcpy/recordings/{id}", web::delete().to(routes::scrcpy::delete_scrcpy_recording)),
+                .route("/scrcpy/recordings/{id}", web::delete().to(routes::scrcpy::delete_scrcpy_recording))
+                // Device reservation WebSocket (Story 10-2)
+                .route("/devices/{query}/reserved", web::get().to(routes::control::reserved))
+                // API V1 Hierarchy, Upload, Rotation (Story 10-4)
+                .route("/api/v1/devices/{udid}/hierarchy", web::get().to(routes::api_v1::hierarchy))
+                .route("/api/v1/devices/{udid}/upload", web::post().to(routes::api_v1::upload))
+                .route("/api/v1/devices/{udid}/rotation", web::post().to(routes::api_v1::rotation))
+                // Video Recording (Story 11-1)
+                .route("/video/convert", web::get().to(routes::video_ws::video_convert_ws))
+                .route("/api/v1/videos", web::get().to(routes::api_v1::list_videos))
+                .route("/api/v1/videos/{id}", web::get().to(routes::api_v1::get_video))
+                .route("/api/v1/videos/{id}/download", web::get().to(routes::api_v1::download_video))
+                .route("/api/v1/videos/{id}", web::delete().to(routes::api_v1::delete_video))
+                .route("/api/v1/videos/{id}/stop", web::post().to(routes::api_v1::stop_video)),
+        )
+        .await;
+
+        (tmp, state, app)
+    }};
+}
+
+/// Helper macro to create a test app WITH API key auth middleware.
+/// Returns (TempDir, AppState, app_service) where app_service enforces auth.
+macro_rules! setup_test_app_with_auth {
+    ($api_key:expr) => {{
+        let (tmp, db) = create_temp_db().await;
+        let config = make_test_config_with_auth($api_key);
+        let pool = ConnectionPool::new(100, Duration::from_secs(60));
+        let tera = tera::Tera::new("resources/templates/**/*").unwrap();
+        let state = AppState::new(db, config, pool, tera, "127.0.0.1".to_string());
+
+        let app_state = state.clone();
+        let api_key_opt = Some($api_key.to_string());
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(app_state))
+                .wrap(middleware::ApiKeyAuth::new(api_key_opt))
+                .route("/", web::get().to(routes::control::index))
+                .route("/devices/{udid}/remote", web::get().to(routes::control::remote))
+                .route("/installfile", web::get().to(routes::control::installfile))
+                .route("/list", web::get().to(routes::control::device_list))
+                .route("/devices/{udid}/info", web::get().to(routes::control::device_info))
+                .route("/inspector/{udid}/screenshot", web::get().to(routes::control::inspector_screenshot))
+                .route("/inspector/{udid}/touch", web::post().to(routes::control::inspector_touch))
+                .route("/heartbeat", web::post().to(routes::control::heartbeat))
+                .route("/api/devices/add", web::post().to(routes::control::add_device))
+                .route("/api/v1/health", web::get().to(routes::api_v1::health_check))
+                .route("/api/v1/openapi.json", web::get().to(routes::api_v1::openapi_spec))
+                .route("/api/v1/status", web::get().to(routes::api_v1::get_device_status))
+                .route("/api/v1/metrics", web::get().to(routes::api_v1::get_metrics))
+                .route("/files", web::get().to(routes::control::files)),
         )
         .await;
 
@@ -3322,6 +3375,88 @@ async fn test_api_v1_metrics() {
     assert!(body_str.contains("cloudcontrol_screenshot_latency_seconds{quantile=\"0.95\"}"));
 }
 
+// ─── Version Endpoint (Story 10-1) ───
+
+#[actix_web::test]
+async fn test_api_v1_version() {
+    let (_tmp, _state, app) = setup_test_app!();
+
+    let req = test::TestRequest::get()
+        .uri("/api/v1/version")
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+
+    let body: Value = test::read_body_json(resp).await;
+    assert_eq!(body["status"], "success");
+    assert_eq!(body["data"]["name"], "cloudcontrol");
+    assert_eq!(body["data"]["version"], "0.1.0");
+    assert_eq!(body["data"]["server"], "cloudcontrol-rust");
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Story 10-2: Device Reservation System Tests
+// ═════════════════════════════════════════════════════════════════════════════
+
+#[actix_web::test]
+async fn test_reserved_device_not_found_returns_404() {
+    let (_tmp, _state, app) = setup_test_app!();
+
+    // Non-WebSocket GET to /devices/{udid}/reserved for a nonexistent device
+    // The handler checks device existence BEFORE WebSocket upgrade, returning HTTP 404
+    let req = test::TestRequest::get()
+        .uri("/devices/nonexistent-device/reserved")
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 404);
+
+    let body: Value = test::read_body_json(resp).await;
+    assert_eq!(body["status"], "error");
+    assert_eq!(body["error"], "ERR_DEVICE_NOT_FOUND");
+    assert!(body["message"].as_str().unwrap().contains("nonexistent-device"));
+}
+
+#[actix_web::test]
+async fn test_reserved_device_exists_but_no_ws_upgrade() {
+    let (_tmp, state, app) = setup_test_app!();
+
+    // Insert a device so it passes the existence check
+    insert_device(&state, "test-res-device", true, true).await;
+
+    // Non-WebSocket GET — device exists but no valid WebSocket upgrade headers
+    // actix_ws::handle will fail, returning 500
+    let req = test::TestRequest::get()
+        .uri("/devices/test-res-device/reserved")
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 500);
+
+    let body: Value = test::read_body_json(resp).await;
+    assert_eq!(body["status"], "error");
+    assert_eq!(body["error"], "ERR_WEBSOCKET_UPGRADE_FAILED");
+}
+
+#[actix_web::test]
+async fn test_reserved_device_not_marked_using_without_ws() {
+    let (_tmp, state, app) = setup_test_app!();
+
+    // Insert a device
+    insert_device(&state, "test-res-check", true, true).await;
+
+    // Attempt reservation without WebSocket upgrade — should fail
+    let req = test::TestRequest::get()
+        .uri("/devices/test-res-check/reserved")
+        .to_request();
+    let _resp = test::call_service(&app, req).await;
+
+    // Verify the device was NOT reserved (no WebSocket = no reservation)
+    assert!(!state.reserved_devices.contains_key("test-res-check"));
+
+    // Verify using_device is still false in DB
+    let device = state.db.find_by_udid("test-res-check").await.unwrap().unwrap();
+    assert_eq!(device["using"], false);
+}
+
 // ─── OpenAPI Spec Validation (Story 5-4) ───
 
 #[actix_web::test]
@@ -3361,7 +3496,15 @@ async fn test_api_v1_openapi_spec_completeness() {
         "/api/v1/status",
         "/api/v1/health",
         "/api/v1/metrics",
+        "/api/v1/version",
         "/api/v1/ws/nio",
+        "/api/v1/devices/{udid}/hierarchy",
+        "/api/v1/devices/{udid}/upload",
+        "/api/v1/devices/{udid}/rotation",
+        "/api/v1/videos",
+        "/api/v1/videos/{id}",
+        "/api/v1/videos/{id}/download",
+        "/api/v1/videos/{id}/stop",
     ];
 
     for path in &required_paths {
@@ -3379,6 +3522,7 @@ async fn test_api_v1_openapi_spec_completeness() {
     assert!(paths["/api/v1/status"]["get"].is_object(), "GET /api/v1/status should be documented");
     assert!(paths["/api/v1/health"]["get"].is_object(), "GET /api/v1/health should be documented");
     assert!(paths["/api/v1/metrics"]["get"].is_object(), "GET /api/v1/metrics should be documented");
+    assert!(paths["/api/v1/version"]["get"].is_object(), "GET /api/v1/version should be documented");
 
     // Verify HTTP methods — POST endpoints
     assert!(paths["/api/v1/devices/{udid}/tap"]["post"].is_object(), "POST /api/v1/devices/{{udid}}/tap should be documented");
@@ -3391,6 +3535,18 @@ async fn test_api_v1_openapi_spec_completeness() {
 
     // Verify WebSocket endpoint
     assert!(paths["/api/v1/ws/nio"]["get"].is_object(), "GET /api/v1/ws/nio should be documented");
+
+    // Verify Story 10-4 endpoints
+    assert!(paths["/api/v1/devices/{udid}/hierarchy"]["get"].is_object(), "GET /api/v1/devices/{{udid}}/hierarchy should be documented");
+    assert!(paths["/api/v1/devices/{udid}/upload"]["post"].is_object(), "POST /api/v1/devices/{{udid}}/upload should be documented");
+    assert!(paths["/api/v1/devices/{udid}/rotation"]["post"].is_object(), "POST /api/v1/devices/{{udid}}/rotation should be documented");
+
+    // Verify Story 11-1 video endpoints
+    assert!(paths["/api/v1/videos"]["get"].is_object(), "GET /api/v1/videos should be documented");
+    assert!(paths["/api/v1/videos/{id}"]["get"].is_object(), "GET /api/v1/videos/{{id}} should be documented");
+    assert!(paths["/api/v1/videos/{id}"]["delete"].is_object(), "DELETE /api/v1/videos/{{id}} should be documented");
+    assert!(paths["/api/v1/videos/{id}/download"]["get"].is_object(), "GET /api/v1/videos/{{id}}/download should be documented");
+    assert!(paths["/api/v1/videos/{id}/stop"]["post"].is_object(), "POST /api/v1/videos/{{id}}/stop should be documented");
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -4102,4 +4258,675 @@ async fn test_playback_missing_device_udid() {
 
     let status_body: Value = test::read_body_json(status_resp).await;
     assert_eq!(status_body["error"], "ERR_MISSING_DEVICE_UDID");
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Story 10-4: API V1 Hierarchy, Upload, Rotation Tests
+// ═════════════════════════════════════════════════════════════════════════════
+
+#[actix_web::test]
+async fn test_v1_hierarchy_device_not_found() {
+    let (_tmp, _state, app) = setup_test_app!();
+
+    let req = test::TestRequest::get()
+        .uri("/api/v1/devices/nonexistent-device/hierarchy")
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 404);
+
+    let body: Value = test::read_body_json(resp).await;
+    assert_eq!(body["status"], "error");
+    assert_eq!(body["error"], "ERR_DEVICE_NOT_FOUND");
+}
+
+#[actix_web::test]
+async fn test_v1_hierarchy_mock_device() {
+    let (_tmp, state, app) = setup_test_app!();
+
+    insert_device(&state, "mock-hierarchy-device", true, true).await;
+
+    let req = test::TestRequest::get()
+        .uri("/api/v1/devices/mock-hierarchy-device/hierarchy")
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+
+    let body: Value = test::read_body_json(resp).await;
+    assert_eq!(body["status"], "success");
+    let data = &body["data"];
+    assert_eq!(data["id"], "mock-root");
+    assert_eq!(data["className"], "android.widget.FrameLayout");
+    assert!(data["children"].is_array());
+    assert_eq!(data["children"][0]["id"], "mock-button");
+}
+
+#[actix_web::test]
+async fn test_v1_upload_device_not_found() {
+    let (_tmp, _state, app) = setup_test_app!();
+
+    let req = test::TestRequest::post()
+        .uri("/api/v1/devices/nonexistent-device/upload")
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 404);
+
+    let body: Value = test::read_body_json(resp).await;
+    assert_eq!(body["status"], "error");
+    assert_eq!(body["error"], "ERR_DEVICE_NOT_FOUND");
+}
+
+#[actix_web::test]
+async fn test_v1_rotation_device_not_found() {
+    let (_tmp, _state, app) = setup_test_app!();
+
+    let req = test::TestRequest::post()
+        .uri("/api/v1/devices/nonexistent-device/rotation")
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 404);
+
+    let body: Value = test::read_body_json(resp).await;
+    assert_eq!(body["status"], "error");
+    assert_eq!(body["error"], "ERR_DEVICE_NOT_FOUND");
+}
+
+#[actix_web::test]
+async fn test_v1_upload_no_file() {
+    let (_tmp, state, app) = setup_test_app!();
+
+    insert_device(&state, "upload-no-file-device", true, true).await;
+
+    let req = test::TestRequest::post()
+        .uri("/api/v1/devices/upload-no-file-device/upload")
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+
+    // No multipart body → "No file uploaded"
+    let body: Value = test::read_body_json(resp).await;
+    assert_eq!(body["status"], "error");
+    assert_eq!(body["error"], "ERR_INVALID_REQUEST");
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Story 11-1: Video Recording Tests
+// ═════════════════════════════════════════════════════════════════════════════
+
+#[actix_web::test]
+async fn test_video_list_empty() {
+    let (_tmp, _state, app) = setup_test_app!();
+
+    let req = test::TestRequest::get()
+        .uri("/api/v1/videos")
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+
+    let body: Value = test::read_body_json(resp).await;
+    assert_eq!(body["status"], "success");
+    assert!(body["data"].is_array());
+    assert_eq!(body["data"].as_array().unwrap().len(), 0);
+}
+
+#[actix_web::test]
+async fn test_video_get_not_found() {
+    let (_tmp, _state, app) = setup_test_app!();
+
+    let req = test::TestRequest::get()
+        .uri("/api/v1/videos/nonexistent-id")
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 404);
+
+    let body: Value = test::read_body_json(resp).await;
+    assert_eq!(body["status"], "error");
+    assert_eq!(body["error"], "ERR_RECORDING_NOT_FOUND");
+}
+
+#[actix_web::test]
+async fn test_video_delete_not_found() {
+    let (_tmp, _state, app) = setup_test_app!();
+
+    let req = test::TestRequest::delete()
+        .uri("/api/v1/videos/nonexistent-id")
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 404);
+
+    let body: Value = test::read_body_json(resp).await;
+    assert_eq!(body["status"], "error");
+    assert_eq!(body["error"], "ERR_RECORDING_NOT_FOUND");
+}
+
+#[actix_web::test]
+async fn test_video_stop_not_found() {
+    let (_tmp, _state, app) = setup_test_app!();
+
+    let req = test::TestRequest::post()
+        .uri("/api/v1/videos/nonexistent-id/stop")
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 404);
+
+    let body: Value = test::read_body_json(resp).await;
+    assert_eq!(body["status"], "error");
+    assert_eq!(body["error"], "ERR_RECORDING_NOT_FOUND");
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Story 11-2: Video Management (Persistence & Filters) Tests
+// ═════════════════════════════════════════════════════════════════════════════
+
+#[actix_web::test]
+async fn test_video_list_filter_by_udid() {
+    let (_tmp, state, app) = setup_test_app!();
+
+    // Insert test video records directly into SQLite
+    let info1 = cloudcontrol::services::video_service::VideoRecordingInfo {
+        id: "vid-1".to_string(),
+        udid: "device-A".to_string(),
+        file_path: "recordings/video_device-A_20260311T120000.mp4".to_string(),
+        started_at: "2026-03-11T12:00:00Z".to_string(),
+        stopped_at: Some("2026-03-11T12:05:00Z".to_string()),
+        frame_count: 600,
+        fps: 2,
+        status: "completed".to_string(),
+        duration_ms: Some(300000),
+        file_size: Some(1024000),
+        device_name: Some("Pixel 6".to_string()),
+    };
+    let info2 = cloudcontrol::services::video_service::VideoRecordingInfo {
+        id: "vid-2".to_string(),
+        udid: "device-B".to_string(),
+        file_path: "recordings/video_device-B_20260311T130000.mp4".to_string(),
+        started_at: "2026-03-11T13:00:00Z".to_string(),
+        stopped_at: Some("2026-03-11T13:02:00Z".to_string()),
+        frame_count: 240,
+        fps: 2,
+        status: "completed".to_string(),
+        duration_ms: Some(120000),
+        file_size: Some(512000),
+        device_name: Some("Galaxy S22".to_string()),
+    };
+    state.db.insert_video(&info1).await.unwrap();
+    state.db.insert_video(&info2).await.unwrap();
+
+    // Filter by device-A
+    let req = test::TestRequest::get()
+        .uri("/api/v1/videos?udid=device-A")
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+
+    let body: Value = test::read_body_json(resp).await;
+    let data = body["data"].as_array().unwrap();
+    assert_eq!(data.len(), 1);
+    assert_eq!(data[0]["udid"], "device-A");
+}
+
+#[actix_web::test]
+async fn test_video_list_filter_by_status() {
+    let (_tmp, state, app) = setup_test_app!();
+
+    let completed = cloudcontrol::services::video_service::VideoRecordingInfo {
+        id: "vid-c".to_string(),
+        udid: "device-X".to_string(),
+        file_path: "recordings/video_device-X_completed.mp4".to_string(),
+        started_at: "2026-03-11T10:00:00Z".to_string(),
+        stopped_at: Some("2026-03-11T10:05:00Z".to_string()),
+        frame_count: 600,
+        fps: 2,
+        status: "completed".to_string(),
+        duration_ms: Some(300000),
+        file_size: Some(1024000),
+        device_name: None,
+    };
+    let failed = cloudcontrol::services::video_service::VideoRecordingInfo {
+        id: "vid-f".to_string(),
+        udid: "device-X".to_string(),
+        file_path: "recordings/video_device-X_failed.mp4".to_string(),
+        started_at: "2026-03-11T11:00:00Z".to_string(),
+        stopped_at: Some("2026-03-11T11:01:00Z".to_string()),
+        frame_count: 10,
+        fps: 2,
+        status: "failed".to_string(),
+        duration_ms: Some(60000),
+        file_size: None,
+        device_name: None,
+    };
+    state.db.insert_video(&completed).await.unwrap();
+    state.db.insert_video(&failed).await.unwrap();
+
+    // Filter by status=completed
+    let req = test::TestRequest::get()
+        .uri("/api/v1/videos?status=completed")
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+
+    let body: Value = test::read_body_json(resp).await;
+    let data = body["data"].as_array().unwrap();
+    assert_eq!(data.len(), 1);
+    assert_eq!(data[0]["status"], "completed");
+    assert_eq!(data[0]["id"], "vid-c");
+
+    // Filter by status=failed
+    let req = test::TestRequest::get()
+        .uri("/api/v1/videos?status=failed")
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+
+    let body: Value = test::read_body_json(resp).await;
+    let data = body["data"].as_array().unwrap();
+    assert_eq!(data.len(), 1);
+    assert_eq!(data[0]["status"], "failed");
+}
+
+#[actix_web::test]
+async fn test_video_persistence_across_service_restart() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db_path = tmp.path().to_str().unwrap();
+
+    // Create first VideoService, insert a video via SQLite
+    let db = cloudcontrol::db::Database::new(db_path, "test.db").await.unwrap();
+    let info = cloudcontrol::services::video_service::VideoRecordingInfo {
+        id: "persist-test".to_string(),
+        udid: "device-persist".to_string(),
+        file_path: "recordings/video_device-persist_test.mp4".to_string(),
+        started_at: "2026-03-11T14:00:00Z".to_string(),
+        stopped_at: Some("2026-03-11T14:05:00Z".to_string()),
+        frame_count: 600,
+        fps: 2,
+        status: "completed".to_string(),
+        duration_ms: Some(300000),
+        file_size: Some(2048000),
+        device_name: Some("Test Device".to_string()),
+    };
+    db.insert_video(&info).await.unwrap();
+
+    // Create a NEW VideoService with the same database — simulates restart
+    let service = cloudcontrol::services::video_service::VideoService::new(db.clone());
+
+    // Video should be retrievable from the new service instance
+    let retrieved = service.get_recording("persist-test").await;
+    assert!(retrieved.is_some());
+    let retrieved = retrieved.unwrap();
+    assert_eq!(retrieved.udid, "device-persist");
+    assert_eq!(retrieved.status, "completed");
+    assert_eq!(retrieved.frame_count, 600);
+
+    // Listing should also include it
+    let all = service.list_recordings(None, None).await;
+    assert_eq!(all.len(), 1);
+    assert_eq!(all[0].id, "persist-test");
+}
+
+#[actix_web::test]
+async fn test_video_openapi_query_params() {
+    let (_tmp, _state, app) = setup_test_app!();
+
+    let req = test::TestRequest::get()
+        .uri("/api/v1/openapi.json")
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    let body = test::read_body(resp).await;
+    let spec: Value = serde_json::from_slice(&body).unwrap();
+
+    // Verify GET /api/v1/videos has query parameters documented
+    let videos_get = &spec["paths"]["/api/v1/videos"]["get"];
+    let params = videos_get["parameters"].as_array().expect("GET /api/v1/videos should have parameters");
+    assert!(params.len() >= 2, "Should have at least udid and status query params");
+
+    let param_names: Vec<&str> = params.iter()
+        .filter_map(|p| p["name"].as_str())
+        .collect();
+    assert!(param_names.contains(&"udid"), "Should have udid query parameter");
+    assert!(param_names.contains(&"status"), "Should have status query parameter");
+
+    // Verify they are query params, not path params
+    for param in params {
+        assert_eq!(param["in"], "query", "Video list params should be query params");
+        assert_eq!(param["required"], false, "Video list params should be optional");
+    }
+}
+
+// ═══════════════ API KEY AUTHENTICATION (Story 12-1) ═══════════════
+
+#[actix_web::test]
+async fn test_auth_api_returns_401_without_key() {
+    let (_tmp, _state, app) = setup_test_app_with_auth!("test-secret-key");
+    let req = test::TestRequest::get().uri("/list").to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 401);
+    let body: Value = test::read_body_json(resp).await;
+    assert_eq!(body["error"], "ERR_UNAUTHORIZED");
+}
+
+#[actix_web::test]
+async fn test_auth_api_succeeds_with_bearer_header() {
+    let (_tmp, _state, app) = setup_test_app_with_auth!("test-secret-key");
+    let req = test::TestRequest::get()
+        .uri("/list")
+        .insert_header(("Authorization", "Bearer test-secret-key"))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+}
+
+#[actix_web::test]
+async fn test_auth_api_succeeds_with_query_param() {
+    let (_tmp, _state, app) = setup_test_app_with_auth!("test-secret-key");
+    let req = test::TestRequest::get()
+        .uri("/list?api_key=test-secret-key")
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+}
+
+#[actix_web::test]
+async fn test_auth_invalid_key_returns_401() {
+    let (_tmp, _state, app) = setup_test_app_with_auth!("test-secret-key");
+    let req = test::TestRequest::get()
+        .uri("/list")
+        .insert_header(("Authorization", "Bearer wrong-key"))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 401);
+}
+
+#[actix_web::test]
+async fn test_auth_exempt_health_endpoint() {
+    let (_tmp, _state, app) = setup_test_app_with_auth!("test-secret-key");
+    let req = test::TestRequest::get()
+        .uri("/api/v1/health")
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+}
+
+#[actix_web::test]
+async fn test_auth_exempt_openapi_endpoint() {
+    let (_tmp, _state, app) = setup_test_app_with_auth!("test-secret-key");
+    let req = test::TestRequest::get()
+        .uri("/api/v1/openapi.json")
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+}
+
+#[actix_web::test]
+async fn test_auth_exempt_page_routes() {
+    let (_tmp, _state, app) = setup_test_app_with_auth!("test-secret-key");
+    // Index page (exempt GET)
+    let req = test::TestRequest::get().uri("/").to_request();
+    let resp = test::call_service(&app, req).await;
+    assert!(resp.status().is_redirection() || resp.status().is_success(),
+        "Index page should be exempt from auth, got {}", resp.status());
+
+    // Installfile page (exempt GET)
+    let req = test::TestRequest::get().uri("/installfile").to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200, "Installfile page should be exempt from auth");
+
+    // Files page (exempt GET)
+    let req = test::TestRequest::get().uri("/files").to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200, "Files page should be exempt from auth");
+}
+
+#[actix_web::test]
+async fn test_auth_exempt_remote_page() {
+    let (_tmp, _state, app) = setup_test_app_with_auth!("test-secret-key");
+    // /devices/{udid}/remote is exempt (GET page route)
+    let req = test::TestRequest::get()
+        .uri("/devices/test-device/remote")
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    // Will be 404 (device not found) but NOT 401, proving auth was bypassed
+    assert_ne!(resp.status(), 401, "Remote page should be exempt from auth");
+}
+
+#[actix_web::test]
+async fn test_auth_same_origin_exempt() {
+    let (_tmp, _state, app) = setup_test_app_with_auth!("test-secret-key");
+    // Same-origin browser requests should bypass auth via Sec-Fetch-Site header
+    let req = test::TestRequest::get()
+        .uri("/list")
+        .insert_header(("Sec-Fetch-Site", "same-origin"))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200, "Same-origin requests should bypass auth");
+}
+
+#[actix_web::test]
+async fn test_auth_non_api_post_requires_key() {
+    let (_tmp, _state, app) = setup_test_app_with_auth!("test-secret-key");
+    // POST /heartbeat is not exempt
+    let req = test::TestRequest::post()
+        .uri("/heartbeat")
+        .set_json(json!({"udid": "test", "source": "test"}))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 401, "POST /heartbeat should require auth");
+}
+
+#[actix_web::test]
+async fn test_auth_disabled_when_no_key() {
+    // Use the normal setup (no auth middleware) — all requests pass
+    let (_tmp, _state, app) = setup_test_app!();
+    let req = test::TestRequest::get().uri("/list").to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200, "Auth disabled should allow all requests");
+}
+
+#[actix_web::test]
+async fn test_auth_401_response_format() {
+    let (_tmp, _state, app) = setup_test_app_with_auth!("test-secret-key");
+    let req = test::TestRequest::get().uri("/list").to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 401);
+    let body: Value = test::read_body_json(resp).await;
+    assert_eq!(body["status"], "error");
+    assert_eq!(body["error"], "ERR_UNAUTHORIZED");
+    assert!(body["message"].as_str().unwrap().contains("API key"));
+    assert!(body["timestamp"].as_str().is_some(), "Should include timestamp");
+}
+
+#[actix_web::test]
+async fn test_auth_inspector_requires_key() {
+    let (_tmp, _state, app) = setup_test_app_with_auth!("test-secret-key");
+    // GET /inspector/{udid}/screenshot is NOT exempt — requires auth
+    let req = test::TestRequest::get()
+        .uri("/inspector/test-device/screenshot")
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 401, "Inspector screenshot should require auth");
+}
+
+#[actix_web::test]
+async fn test_auth_openapi_includes_security_scheme() {
+    let (_tmp, _state, app) = setup_test_app_with_auth!("test-secret-key");
+    // OpenAPI is exempt from auth, so we can fetch it without a key
+    let req = test::TestRequest::get()
+        .uri("/api/v1/openapi.json")
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+    let body: Value = test::read_body_json(resp).await;
+    // Verify security schemes are present
+    let schemes = &body["components"]["securitySchemes"];
+    assert!(schemes["ApiKeyHeader"].is_object(), "Should have ApiKeyHeader scheme");
+    assert!(schemes["ApiKeyQuery"].is_object(), "Should have ApiKeyQuery scheme");
+    // Verify top-level security requirement
+    let security = body["security"].as_array().expect("Should have security array");
+    assert!(!security.is_empty(), "Security array should not be empty");
+}
+
+// ═══════════════ RATE LIMITING INTEGRATION TESTS (Story 12-2) ═══════════════
+
+/// Helper macro to create a test app WITH rate limiting middleware.
+/// Returns (TempDir, AppState, app_service) where app_service enforces rate limits.
+macro_rules! setup_test_app_with_rate_limit {
+    ($requests_per_window:expr, $window_secs:expr) => {{
+        let (tmp, db) = create_temp_db().await;
+        let config = make_test_config_with_rate_limit($requests_per_window, $window_secs);
+        let pool = ConnectionPool::new(100, Duration::from_secs(60));
+        let tera = tera::Tera::new("resources/templates/**/*").unwrap();
+        let state = AppState::new(db, config.clone(), pool, tera, "127.0.0.1".to_string());
+
+        let app_state = state.clone();
+        let rate_limiter = config.rate_limit.as_ref().map(|cfg| {
+            std::sync::Arc::new(middleware::RateLimiter::new(cfg.clone()))
+        });
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(app_state))
+                .wrap(middleware::RateLimit::new(rate_limiter))
+                .route("/list", web::get().to(routes::control::device_list))
+                .route("/devices/{udid}/info", web::get().to(routes::control::device_info))
+                .route("/inspector/{udid}/screenshot", web::get().to(routes::control::inspector_screenshot))
+                .route("/api/screenshot/batch", web::post().to(routes::control::batch_screenshot))
+                .route("/api/v1/health", web::get().to(routes::api_v1::health_check))
+                .route("/api/v1/openapi.json", web::get().to(routes::api_v1::openapi_spec)),
+        )
+        .await;
+
+        (tmp, state, app)
+    }};
+}
+
+#[actix_web::test]
+async fn test_rate_limit_allows_within_window() {
+    let (_tmp, _state, app) = setup_test_app_with_rate_limit!(5, 60);
+    // 5 requests should all succeed
+    for _ in 0..5 {
+        let req = test::TestRequest::get().uri("/list").to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), 200, "Should allow requests within rate limit");
+    }
+}
+
+#[actix_web::test]
+async fn test_rate_limit_blocks_over_limit() {
+    let (_tmp, _state, app) = setup_test_app_with_rate_limit!(3, 60);
+    // Exhaust the limit
+    for _ in 0..3 {
+        let req = test::TestRequest::get().uri("/list").to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), 200);
+    }
+    // 4th request should be rate limited
+    let req = test::TestRequest::get().uri("/list").to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 429, "Should return 429 when rate limit exceeded");
+}
+
+#[actix_web::test]
+async fn test_rate_limit_429_response_format() {
+    let (_tmp, _state, app) = setup_test_app_with_rate_limit!(1, 60);
+    // First request succeeds
+    let req = test::TestRequest::get().uri("/list").to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+    // Second request is rate limited
+    let req = test::TestRequest::get().uri("/list").to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 429);
+    // Verify response body format
+    let body: Value = test::read_body_json(resp).await;
+    assert_eq!(body["status"], "error");
+    assert_eq!(body["error"], "ERR_RATE_LIMITED");
+    assert!(body["message"].as_str().unwrap().contains("Rate limit exceeded"));
+}
+
+#[actix_web::test]
+async fn test_rate_limit_429_headers_present() {
+    let (_tmp, _state, app) = setup_test_app_with_rate_limit!(1, 60);
+    // Exhaust limit
+    let req = test::TestRequest::get().uri("/list").to_request();
+    let _ = test::call_service(&app, req).await;
+    // 429 response should have rate limit headers
+    let req = test::TestRequest::get().uri("/list").to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 429);
+    assert!(resp.headers().contains_key("X-RateLimit-Limit"), "Should have X-RateLimit-Limit");
+    assert!(resp.headers().contains_key("X-RateLimit-Remaining"), "Should have X-RateLimit-Remaining");
+    assert!(resp.headers().contains_key("X-RateLimit-Reset"), "Should have X-RateLimit-Reset");
+    assert!(resp.headers().contains_key("Retry-After"), "Should have Retry-After");
+}
+
+#[actix_web::test]
+async fn test_rate_limit_429_has_retry_after() {
+    let (_tmp, _state, app) = setup_test_app_with_rate_limit!(1, 60);
+    // Exhaust limit
+    let req = test::TestRequest::get().uri("/list").to_request();
+    let _ = test::call_service(&app, req).await;
+    // Rate limited request
+    let req = test::TestRequest::get().uri("/list").to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 429);
+    assert!(resp.headers().contains_key("Retry-After"), "429 should have Retry-After header");
+}
+
+#[actix_web::test]
+async fn test_rate_limit_exempt_paths() {
+    let (_tmp, _state, app) = setup_test_app_with_rate_limit!(1, 60);
+    // Exhaust limit with a regular request
+    let req = test::TestRequest::get().uri("/list").to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+    // OpenAPI spec should be exempt from rate limiting
+    let req = test::TestRequest::get().uri("/api/v1/openapi.json").to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200, "OpenAPI spec should be exempt from rate limiting");
+}
+
+#[actix_web::test]
+async fn test_rate_limit_disabled_when_not_configured() {
+    // Use the normal setup (no rate limit middleware) — all requests pass
+    let (_tmp, _state, app) = setup_test_app!();
+    for _ in 0..20 {
+        let req = test::TestRequest::get().uri("/list").to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), 200, "All requests should pass when rate limiting disabled");
+    }
+}
+
+#[actix_web::test]
+async fn test_rate_limit_429_limit_header_value() {
+    let (_tmp, _state, app) = setup_test_app_with_rate_limit!(3, 60);
+    // Exhaust limit
+    for _ in 0..3 {
+        let req = test::TestRequest::get().uri("/list").to_request();
+        let _ = test::call_service(&app, req).await;
+    }
+    // 429 response should have correct limit value
+    let req = test::TestRequest::get().uri("/list").to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 429);
+    let limit: u32 = resp.headers().get("X-RateLimit-Limit")
+        .unwrap().to_str().unwrap().parse().unwrap();
+    assert_eq!(limit, 3, "X-RateLimit-Limit should match configured limit");
+    let remaining: u32 = resp.headers().get("X-RateLimit-Remaining")
+        .unwrap().to_str().unwrap().parse().unwrap();
+    assert_eq!(remaining, 0, "X-RateLimit-Remaining should be 0 on 429");
+}
+
+#[actix_web::test]
+async fn test_rate_limit_openapi_shows_429() {
+    let (_tmp, _state, app) = setup_test_app_with_rate_limit!(100, 60);
+    let req = test::TestRequest::get().uri("/api/v1/openapi.json").to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+    let body: Value = test::read_body_json(resp).await;
+    // Check that at least one endpoint path has a 429 response documented
+    let paths = body["paths"].as_object().expect("Should have paths");
+    let has_429 = paths.values().any(|path_item| {
+        path_item.as_object().map_or(false, |methods| {
+            methods.values().any(|op| {
+                op["responses"]["429"].is_object()
+            })
+        })
+    });
+    assert!(has_429, "OpenAPI spec should document 429 responses for rate limiting");
 }

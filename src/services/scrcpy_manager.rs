@@ -729,6 +729,24 @@ impl ScrcpyManager {
         Ok(())
     }
 
+    /// Stop all active scrcpy sessions. Used during graceful shutdown.
+    pub async fn stop_all_sessions(&self) {
+        let udids: Vec<String> = self.sessions.iter().map(|e| e.key().clone()).collect();
+        let total = udids.len();
+        let mut failed = 0usize;
+        for udid in udids {
+            if let Err(e) = self.stop_session(&udid).await {
+                tracing::warn!("[ScrcpyManager] Failed to stop session for {}: {}", udid, e);
+                failed += 1;
+            }
+        }
+        if failed > 0 {
+            tracing::warn!("[ScrcpyManager] Shutdown: {}/{} sessions stopped ({} failed)", total - failed, total, failed);
+        } else {
+            tracing::info!("[ScrcpyManager] Shutdown: {} sessions stopped", total);
+        }
+    }
+
     /// Remove tracking for a device (e.g. when it disconnects).
     pub fn remove_device(&self, serial: &str) {
         self.pushed.remove(serial);
@@ -971,5 +989,13 @@ mod tests {
     fn test_get_recording_file_path_not_found() {
         let manager = ScrcpyManager::new();
         assert!(manager.get_recording_file_path("nonexistent").is_none());
+    }
+
+    #[tokio::test]
+    async fn test_stop_all_sessions_empty() {
+        let manager = ScrcpyManager::new();
+        // Should complete without error on empty state
+        manager.stop_all_sessions().await;
+        assert!(manager.list_sessions().is_empty());
     }
 }

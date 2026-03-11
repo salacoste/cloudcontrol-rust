@@ -5,160 +5,220 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta http-equiv="X-UA-Compatible" content="ie=edge">
-    <link rel="stylesheet" href="assets/logcat.css">
-    <title>Document</title>
+    <title>Device Test</title>
+    <style>
+        body { margin: 0; padding: 10px; background: #1a1a1a; color: #fff; font-family: sans-serif; }
+        #error { color: #ff4444; font-size: 18px; padding: 20px; }
+        #status { color: #aaa; font-size: 14px; padding: 5px 0; }
+        canvas { border: 1px solid #444; cursor: crosshair; display: block; margin-top: 5px; }
+    </style>
 </head>
 
 <body>
-<canvas id="canvas" style="border: 1px solid red;"></canvas>
+<div id="error"></div>
+<div id="status">Connecting...</div>
+<canvas id="canvas"></canvas>
 
 <script>
+(function() {
+    var BLANK_IMG = 'data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==';
 
-    var BLANK_IMG =
-        'data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw=='
-    var canvas = document.getElementById('canvas'),
-        g = canvas.getContext('2d')
-    var ws = new WebSocket("ws://172.17.2.23:7912/minicap")
-    ws.binaryType = 'blob'
-    ws.onclose = function () {
-        console.log('onclose', arguments)
-        var warn = document.createElement("div")
-        warn.innerText = "Websocket closed, Refresh to reload."
-        warn.style.color = "red"
-        warn.style.fontSize = "20px"
-        document.body.appendChild(warn);
+    // Get device UDID from URL query parameter
+    var params = new URLSearchParams(window.location.search);
+    var udid = params.get('udid');
+
+    if (!udid) {
+        document.getElementById('error').innerText =
+            'No device UDID specified. Usage: /test?udid=DEVICE_UDID';
+        document.getElementById('status').innerText = '';
+        return;
     }
-    ws.onerror = function () {
-        console.log('onerror', arguments)
+
+    document.title = 'Test: ' + udid;
+    var statusEl = document.getElementById('status');
+    var canvas = document.getElementById('canvas');
+    var ctx = canvas.getContext('2d');
+
+    // ── Diagnostic state ──
+    var frameCount = 0;
+    var lastFpsUpdate = Date.now();
+    var currentFps = 0;
+    var lastAction = '';
+    var wsConnected = false;
+
+    function updateStatus() {
+        if (!wsConnected) return; // Don't overwrite disconnect messages
+        var parts = ['Connected — ' + udid];
+        if (currentFps > 0) parts.push(currentFps + ' fps');
+        if (lastAction) parts.push('Last: ' + lastAction);
+        statusEl.style.color = '#aaa';
+        statusEl.innerText = parts.join(' | ');
     }
-    ws.onmessage = function (message) {
-        if (message.data instanceof Blob) {
-            var blob = new Blob([message.data], {
-                type: 'image/jpeg'
-            })
-            var URL = window.URL || window.webkitURL
-            var img = new Image()
-            img.onload = function () {
-                // console.log(img.width, img.height)
-                canvas.width = img.width
-                canvas.height = img.height
-                g.drawImage(img, 0, 0)
-                img.onload = null
-                img.src = BLANK_IMG
-                img = null
-                u = null
-                blob = null
+
+    // Reset stale FPS when no frames arrive
+    setInterval(function() {
+        if (wsConnected && Date.now() - lastFpsUpdate >= 2000 && currentFps > 0) {
+            currentFps = 0;
+            updateStatus();
+        }
+    }, 2000);
+
+    // ── Screen Streaming via NIO WebSocket proxy ──
+    var protocol = location.protocol === "https:" ? "wss:" : "ws:";
+    var wsUrl = protocol + "//" + location.host + "/nio/" + udid + "/ws";
+    var ws = new WebSocket(wsUrl);
+    ws.binaryType = 'arraybuffer';
+
+    ws.onopen = function() {
+        wsConnected = true;
+        updateStatus();
+        ws.send(JSON.stringify({
+            type: "subscribe",
+            target: "screenshot",
+            interval: 100
+        }));
+    };
+
+    ws.onmessage = function(message) {
+        if (message.data instanceof ArrayBuffer) {
+            var blob = new Blob([message.data], { type: 'image/jpeg' });
+            var url = URL.createObjectURL(blob);
+            var img = new Image();
+            img.onload = function() {
+                canvas.width = img.width;
+                canvas.height = img.height;
+                ctx.drawImage(img, 0, 0);
+                img.onload = img.onerror = null;
+                img.src = BLANK_IMG;
+                URL.revokeObjectURL(url);
+
+                frameCount++;
+                var now = Date.now();
+                if (now - lastFpsUpdate >= 1000) {
+                    currentFps = frameCount;
+                    frameCount = 0;
+                    lastFpsUpdate = now;
+                    updateStatus();
+                }
+            };
+            img.onerror = function() {
+                img.onload = img.onerror = null;
+                img.src = BLANK_IMG;
+                URL.revokeObjectURL(url);
+            };
+            img.src = url;
+        } else if (typeof message.data === 'string') {
+            try {
+                var data = JSON.parse(message.data);
+                console.log("[NIO] message:", data.type || data.status, data);
+            } catch(e) {
+                console.log("[NIO] text:", message.data);
             }
-            var u = URL.createObjectURL(blob)
-            img.src = u
+        }
+    };
+
+    ws.onclose = function() {
+        wsConnected = false;
+        currentFps = 0;
+        statusEl.innerText = 'WebSocket closed. Refresh to reconnect.';
+        statusEl.style.color = '#ff4444';
+    };
+
+    ws.onerror = function() {
+        wsConnected = false;
+        currentFps = 0;
+        statusEl.innerText = 'WebSocket error.';
+        statusEl.style.color = '#ff4444';
+    };
+
+    // ── Touch Input via server proxy ──
+    var mouseDown = false;
+    var mouseMove = false;
+    var downX, downY;
+
+    // Scale factors: computed on first interaction
+    var scaleX, scaleY;
+
+    function updateScale() {
+        // Default device resolution; actual resolution comes from the canvas image size
+        scaleX = canvas.width / canvas.offsetWidth;
+        scaleY = canvas.height / canvas.offsetHeight;
+    }
+
+    function getDeviceCoords(e) {
+        updateScale();
+        var rect = canvas.getBoundingClientRect();
+        var x = Math.floor((e.clientX - rect.left) * scaleX);
+        var y = Math.floor((e.clientY - rect.top) * scaleY);
+        return { x: x, y: y };
+    }
+
+    function sendTap(x, y) {
+        lastAction = 'tap(' + x + ', ' + y + ')';
+        updateStatus();
+        fetch("/inspector/" + udid + "/touch", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ x: x, y: y })
+        }).catch(function(err) {
+            console.error("[Touch] tap failed:", err);
+            statusEl.innerText = 'Touch failed — check connection';
+        });
+    }
+
+    function sendSwipe(x1, y1, x2, y2, duration) {
+        lastAction = 'swipe(' + x1 + ',' + y1 + ' \u2192 ' + x2 + ',' + y2 + ')';
+        updateStatus();
+        fetch("/inspector/" + udid + "/touch", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ x: x1, y: y1, x2: x2, y2: y2, duration: duration || 200 })
+        }).catch(function(err) {
+            console.error("[Touch] swipe failed:", err);
+            statusEl.innerText = 'Touch failed — check connection';
+        });
+    }
+
+    function mouseMoveListener(e) {
+        if (mouseDown) {
+            mouseMove = true;
+        }
+    }
+
+    function mouseUpListener(e) {
+        if (e.which === 3) return;
+        e.preventDefault();
+        var pos = getDeviceCoords(e);
+
+        if (!mouseMove) {
+            sendTap(downX, downY);
         } else {
-            // console.log(message.data)
+            sendSwipe(downX, downY, pos.x, pos.y, 200);
         }
+
+        stopMousing();
     }
-    ws.onopen = function () {
-        console.log('onopen', arguments)
-        ws.send('1920x1080/0')
+
+    function stopMousing() {
+        mouseDown = false;
+        mouseMove = false;
+        canvas.removeEventListener('mousemove', mouseMoveListener);
+        document.removeEventListener('mouseup', mouseUpListener);
     }
+
+    canvas.addEventListener('mousedown', function(e) {
+        if (e.which === 3) return;
+        e.preventDefault();
+        mouseDown = true;
+        mouseMove = false;
+        var pos = getDeviceCoords(e);
+        downX = pos.x;
+        downY = pos.y;
+        canvas.addEventListener('mousemove', mouseMoveListener);
+        document.addEventListener('mouseup', mouseUpListener);
+    });
+})();
 </script>
+
 </body>
-<script>
-    window.onload = function(){
-        var mobile_w=1080;
-        var mobile_h=2160;
-        var element = document.getElementById('canvas');
-        var mouseDown=false
-        var mouseMove=false
-
-
-        // Mouse down
-        function mouseDownListener(event){
-            mouseDown=true
-            var e = event;
-
-            if (window.bili_x == undefined){
-                window.bili_x=mobile_w/element.width;
-                window.bili_y=mobile_h/element.height;
-                console.log("scale ratio  "+bili_x+"---"+bili_y);
-            }
-            //first point
-            window.downpoint_x = parseInt((e.clientX - this.offsetLeft) * bili_x);
-            window.downpoint_y = parseInt((e.clientY - this.offsetTop) * bili_y);
-
-        }
-
-        function mouseMoveListener(event){
-            if (mouseDown){
-                mouseMove=true;
-            }
-        }
-        function mouseUpListener(event){
-            var e = event;
-            var uppoint_x = parseInt((e.clientX - this.offsetLeft) * bili_x);
-            var uppoint_y = parseInt((e.clientY - this.offsetTop) * bili_y);
-            mouseDown=false
-            // Check if it is a move
-            if (!mouseMove&&(uppoint_x==downpoint_x)&&(uppoint_y==downpoint_y)){
-                console.log("mouseDownListener")
-                var commond="input tap "+downpoint_x+" "+downpoint_y
-                console.log(commond)
-                var url="http://172.17.2.228:8000/devices/touch/"+commond
-                // console.log(url)
-                //upload
-                function prase(response){
-                    console.log
-                }
-                request().get(url=url,null,callback=prase)
-
-
-            }else{
-                console.log("mouseMoveListener")
-                mouseMove=false
-
-                commond="input swipe "+window.downpoint_x+" "+window.downpoint_y+" "+uppoint_x+" "+uppoint_y+" 100"
-                console.log(commond)
-                var url="http://172.17.2.228:8000/devices/touch/"+commond
-                // console.log(url)
-                //upload
-                function prase(response){
-                    console.log
-                }
-                request().get(url=url,null,callback=prase)
-
-            }
-        }
-        function request(){
-            var obj={}
-            var xhr=new XMLHttpRequest();
-            obj.get=(url,headers,callback)=>{
-                if (headers!=undefined&&headers!=null){
-                    headers.forEach((k,v)=>{
-                        xhr.setRequestHeader(k,v);
-                    });
-                }
-                if (callback!=undefined){
-                    xhr.onreadystatechange=(res)=>{
-                        if(xhr.readyState==4){
-                            if(xhr.state==200){
-                                console.log(xhr.responseText)
-                                callback(xhr.responseText)
-                            }
-                        }
-                    }
-                }
-                xhr.open("GET",url,true)
-                xhr.send(null);
-            }
-            return obj
-        }
-
-        element.addEventListener('mousedown', mouseDownListener);
-        element.addEventListener('mousemove', mouseMoveListener);
-        element.addEventListener('mouseup', mouseUpListener);
-
-        // element.addEventListener('mousemove', mouseHoverListener);
-
-
-    }
-</script>
-
 </html>

@@ -4,6 +4,7 @@ use crate::pool::connection_pool::ConnectionPool;
 use crate::pool::screenshot_cache::ScreenshotCache;
 use crate::services::recording_service::RecordingService;
 use crate::services::scrcpy_manager::ScrcpyManager;
+use crate::services::video_service::VideoService;
 use dashmap::DashMap;
 use moka::future::Cache;
 use serde_json::Value;
@@ -104,6 +105,18 @@ pub struct AppState {
     pub scrcpy_manager: ScrcpyManager,
     /// Metrics tracker for latency and connection monitoring (Story 5-3)
     pub metrics: Arc<MetricsTracker>,
+    /// Provider heartbeat tracking: provider_id → expiry timestamp (Story 9-2)
+    pub provider_heartbeats: Arc<DashMap<i64, f64>>,
+    /// Device reservation tracking: UDID → remote client address (Story 10-2)
+    pub reserved_devices: Arc<DashMap<String, String>>,
+    /// Video recording service for JPEG-to-MP4 conversion (Story 11-1)
+    pub video_service: VideoService,
+    /// Whether FFmpeg is available on the system (Story 11-1)
+    pub ffmpeg_available: bool,
+    /// Whether API key authentication is enabled (Story 12-1)
+    pub api_key_enabled: bool,
+    /// Whether rate limiting is enabled (Story 12-2)
+    pub rate_limiting_enabled: bool,
 }
 
 impl AppState {
@@ -115,14 +128,22 @@ impl AppState {
         host_ip: String,
     ) -> Self {
         let recording_service = RecordingService::new(db.get_pool());
+        let video_service = VideoService::new(db.clone());
+        let api_key_enabled = config.api_key.as_ref().map_or(false, |k| !k.is_empty());
+        let rate_limiting_enabled = config.rate_limit.is_some();
+
+        // Use configurable cache settings (Story 12-4)
+        let device_info_max = config.cache.device_info_max;
+        let device_info_ttl = Duration::from_secs(config.cache.device_info_ttl_secs);
+
         Self {
             db,
             config,
             connection_pool: Arc::new(connection_pool),
             screenshot_cache: Arc::new(ScreenshotCache::new(20, Duration::from_millis(300))),
             device_info_cache: Cache::builder()
-                .max_capacity(500)
-                .time_to_live(Duration::from_secs(300))
+                .max_capacity(device_info_max)
+                .time_to_live(device_info_ttl)
                 .build(),
             tera,
             heartbeat_sessions: Arc::new(DashMap::new()),
@@ -130,6 +151,12 @@ impl AppState {
             recording_service,
             scrcpy_manager: ScrcpyManager::new(),
             metrics: Arc::new(MetricsTracker::new()),
+            provider_heartbeats: Arc::new(DashMap::new()),
+            reserved_devices: Arc::new(DashMap::new()),
+            video_service,
+            ffmpeg_available: false, // Set at startup after async check
+            api_key_enabled,
+            rate_limiting_enabled,
         }
     }
 }

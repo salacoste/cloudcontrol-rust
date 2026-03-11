@@ -95,7 +95,7 @@ impl AtxInit {
     }
 
     /// Verify server readiness via a direct URL (for already-forwarded connections).
-    pub async fn verify_ready(ip: &str, port: i64) -> bool {
+    pub async fn verify_ready(_ip: &str, port: i64) -> bool {
         Self::check_port_alive(port as u16).await
     }
 }

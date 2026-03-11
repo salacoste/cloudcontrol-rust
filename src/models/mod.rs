@@ -3,4 +3,6 @@ pub mod batch_report;
 pub mod device;
 pub mod file;
 pub mod openapi;
+pub mod product;
+pub mod provider;
 pub mod recording;

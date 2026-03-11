@@ -205,13 +205,6 @@ impl ScrcpySession {
         })
     }
 
-    /// Read screen dimensions from adb as fallback.
-    async fn read_initial_dimensions(serial: &str) -> (u32, u32) {
-        match Adb::get_screen_size(serial).await {
-            Ok((w, h)) => (w as u32, h as u32),
-            Err(_) => (1080, 1920),
-        }
-    }
 
     /// Read one video frame from the stream.
     ///
@@ -327,11 +320,3 @@ impl ScrcpySession {
     }
 }
 
-/// Simple hash to generate a stable scid from a string.
-fn crc16_hash(s: &str) -> u32 {
-    let mut hash: u32 = 0;
-    for b in s.bytes() {
-        hash = hash.wrapping_mul(31).wrapping_add(b as u32);
-    }
-    hash & 0x7FFFFFFF
-}

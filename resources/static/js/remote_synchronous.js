@@ -2,13 +2,10 @@
 window.app = new Vue({
     el: '#app',
     data: {
-        deviceIp: deviceIp,
         deviceList: [],
         deviceUdid: deviceUdid,
-        device: {
-            ip: deviceIp,
-            port: 7912,
-        },
+        masterIndex: 0,
+        device: {},
         deviceInfo: {},
         fixConsole: '', // log for fix minicap and rotation
         navtabs: {
@@ -16,8 +13,6 @@ window.app = new Vue({
             tabs: [],
         },
         error: '',
-        control: null,
-        control_list:[],
         loading: false,
         canvas: {
             bg: null,
@@ -43,7 +38,7 @@ window.app = new Vue({
                 height: 1
             }
         },
-        screenWS: [],
+        screenWS: null,
         browserURL: "",
         logcat: {
             follow: true,
@@ -62,19 +57,22 @@ window.app = new Vue({
         videoUrl: '',
         videoReceiver: null, // sub function to receive image
         inputText: '',
-        inputWS: null,
     },
     watch: {},
     computed: {
-        deviceUrl: function () {
-            return "http://" + this.device.ip + ":" + this.device.port;
-        }
+        // deviceUrl removed — all calls proxied through server via /inspector/{udid}/...
     },
     mounted: function () {
         // this.deviceList=window.deviceList;
         for(var i=0;i<deviceList.length;i++){
-            this.deviceList.push({src:"http://"+deviceList[i]["src"]+":7912/screenshot",
-                des:deviceList[i]["src"],remote:"/devices/"+deviceList[i]["udid"]+"/remote"})
+            this.deviceList.push({
+                src: "/devices/" + deviceList[i]["udid"] + "/screenshot/0",
+                des: deviceList[i]["src"],
+                remote: "/devices/" + deviceList[i]["udid"] + "/remote",
+                udid: deviceList[i]["udid"],
+                width: deviceList[i]["width"] || 1080,
+                height: deviceList[i]["height"] || 1920
+            })
         }
 
         var self = this;
@@ -89,13 +87,13 @@ window.app = new Vue({
 
         this.initDragDealer();
 
-        // get device info
+        // get device info (via server proxy, not direct to device)
         $.ajax({
-            url: this.deviceUrl + "/info", // "/devices/" + this.deviceUdid + "/info",
-            dateType: "json"
+            url: "/devices/" + this.deviceUdid + "/info",
+            dataType: "json"
         }).then(function (ret) {
             this.deviceInfo = ret;
-            document.title = ret.model;
+            document.title = ret.model || 'Device';
         }.bind(this));
         this.enableTouch();
         this.openScreenStream();
@@ -108,32 +106,27 @@ window.app = new Vue({
 
     },
     watch: {
-        inputText: function (newText) {
-            console.log(newText);
-            this.inputWS.send(JSON.stringify({ type: "InputEdit", text: newText }))
-        }
+        // inputText watcher removed — inputWS was never initialized (dead code)
     },
     methods: {
+        // Get target devices for batch operations — returns all devices in the list
+        getTargetDevices: function () {
+            return this.deviceList;
+        },
 
         toggleScreen: function () {
-            for(var i=0;i<this.screenWS.length;i++){
-                if (this.screenWS[i] && i == 0) {
-                    this.screenWS[i].close();
-                    this.canvasStyle.opacity = 0;
-                    this.screenWS.splice(i);
-                } else if(this.screenWS[i] && i != 0){
-                    this.screenWS[i].close();
-                    this.screenWS.splice(i);
-                }
-                else{
-                    this.openScreenStream();
-                    this.canvasStyle.opacity = 1;
-                }
+            if (this.screenWS) {
+                this.screenWS.close();
+                this.screenWS = null;
+                this.canvasStyle.opacity = 0;
+            } else {
+                this.openScreenStream();
+                this.canvasStyle.opacity = 1;
             }
         },
         saveScreenshot: function () {
             $.ajax({
-                url: this.deviceUrl + "/screenshot",
+                url: "/inspector/" + this.deviceUdid + "/screenshot/img",
                 cache: false,
                 xhrFields: {
                     responseType: 'blob'
@@ -150,7 +143,7 @@ window.app = new Vue({
         },
         fixRotation: function () {
             $.ajax({
-                url: this.deviceUrl + "/info/rotation",
+                url: "/inspector/" + this.deviceUdid + "/rotation",
                 method: "post",
             }).then(function (ret) {
                 console.log("rotation fixed")
@@ -165,23 +158,29 @@ window.app = new Vue({
             this.logcat.follow = false;
         },
         hold: function (msecs) {
-            this.control.touchDown(0, 0.5, 0.5, 5, 0.5)
-            this.control.touchCommit();
-            this.control.touchWait(msecs);
-            this.control.touchUp(0)
-            this.control.touchCommit();
+            // Long-press at center of screen via server proxy
+            var master = this.deviceList[this.masterIndex];
+            var devW = (master && master.width) || 1080;
+            var devH = (master && master.height) || 1920;
+            var cx = Math.floor(devW / 2);
+            var cy = Math.floor(devH / 2);
+            this.sendTouchToDevices(cx, cy, cx, cy, msecs || 1000);
         },
         keyevent: function (meta) {
-            console.log("keyevent", meta)
-            $.ajax({
-                url: "/devices/shell/input keyevent " + meta.toUpperCase()+ "?list=" + JSON.stringify(deviceList),
-                method: "get"
-            })
-            return this.shell("input keyevent " + meta.toUpperCase());
+            console.log("keyevent", meta);
+            var targets = this.getTargetDevices();
+            for (var i = 0; i < targets.length; i++) {
+                $.ajax({
+                    url: "/inspector/" + targets[i].udid + "/keyevent",
+                    method: "POST",
+                    contentType: "application/json",
+                    data: JSON.stringify({ key: meta.toUpperCase() })
+                });
+            }
         },
         shell: function (command) {
             return $.ajax({
-                url: this.deviceUrl + "/shell",
+                url: "/inspector/" + this.deviceUdid + "/shell",
                 method: "post",
                 data: {
                     command: command,
@@ -262,125 +261,14 @@ window.app = new Vue({
         delayReload: function (msec) {
             setTimeout(this.screenDumpUI, msec || 1000);
         },
-        // Old version canvas
-        // openScreenStream: function () {
-        //     var self = this;
-        //     var BLANK_IMG =
-        //         'data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw=='
-        //     var protocol = location.protocol == "http:" ? "ws://" : "wss://"
-        //     for (var i=0;i<this.deviceList.length;i++) {
-        //
-        //         var canvas = document.getElementById('bgCanvas' + i)
-        //         var ctx = canvas.getContext('2d')
-        //
-        //         this.screenWS[i] = {
-        //             ws: new WebSocket("ws://"+ this.deviceList[i].src + ":"+ this.deviceList[i].port  + '/minicap'),
-        //             canvas: canvas,
-        //             ctx: ctx,
-        //             imageBlobBuffer: []
-        //         }
-        //
-        //         this.screenWS[i].ws.onopen = function (ev) {
-        //             console.log('screen websocket connected')
-        //         };
-        //
-        //         // FIXME(ssx): use pubsub is better
-        //         this.screenWS[i].ws.screenWS = this.screenWS[i]
-        //         this.screenWS[i].ws.screenWS.imageBlobBuffer = this.screenWS[i].imageBlobBuffer
-        //         this.screenWS[i].ws.screenWS.imageBlobMaxLength = 3000
-        //         this.screenWS[i].ws.screenWS.imagePool = new ImagePool(3000)
-        //
-        //
-        //         this.screenWS[i].ws.onmessage = function (message) {
-        //             if (message.data instanceof Blob) {
-        //                 // console.log("image received");
-        //                 $.publish("imagedata", message.data);
-        //
-        //                 var blob = new Blob([message.data], {
-        //                     type: 'image/jpeg'
-        //                 })
-        //
-        //                 this.screenWS.imageBlobBuffer.push(blob);
-        //
-        //                 if (this.screenWS.imageBlobBuffer.length > this.screenWS.imageBlobMaxLength) {
-        //                     this.screenWS.imageBlobBuffer.shift();
-        //                 }
-        //                 this.screenWS.img = this.screenWS.imagePool.next();
-        //
-        //                 this.screenWS.img.screenWS = this.screenWS
-        //                 this.screenWS.img.onload = function () {
-        //                     // If not the main operation screen
-        //                     if(this.screenWS.canvas.id !="bgCanvas0"){
-        //                         this.width = this.screenWS.canvas.width
-        //                         this.height = this.screenWS.canvas.height
-        //                         console.log(message.currentTarget.url + "  image" + this.width + " " + this.height)
-        //                         this.screenWS.ctx.drawImage(this, 0, 0, this.width, this.height);
-        //                         // Restore image width and height
-        //                         this.width = 400
-        //                         this.height = 800
-        //                     }else{
-        //                         this.screenWS.canvas.width = this.width
-        //                         this.screenWS.canvas.height = this.height
-        //                         console.log(message.currentTarget.url + "  image" + this.width + " " + this.height)
-        //                         this.screenWS.ctx.drawImage(this, 0, 0, this.width, this.height);
-        //                         self.resizeScreen(this);
-        //                     }
-        //
-        //                     // Try to forcefully clean everything to get rid of memory
-        //                     // leaks. Note self despite this effort, Chrome will still
-        //                     // leak huge amounts of memory when the developer tools are
-        //                     // open, probably to save the resources for inspection. When
-        //                     // the developer tools are closed no memory is leaked.
-        //                     this.onload = this.onerror = null
-        //                     this.src = BLANK_IMG
-        //                     this.screenWS.img = null
-        //                     blob = null
-        //                     URL.revokeObjectURL(url)
-        //                     url = null
-        //                 }
-        //
-        //                 this.screenWS.img.onerror = function () {
-        //                     // Happily ignore. I suppose this shouldn't happen, but
-        //                     // sometimes it does, presumably when we're loading images
-        //                     // too quickly.
-        //
-        //                     // Do the same cleanup here as in onload.
-        //                     this.onload = this.onerror = null
-        //                     this.src = BLANK_IMG
-        //                     this.screenWS.img = null
-        //                     blob = null
-        //
-        //                     URL.revokeObjectURL(url)
-        //                     url = null
-        //                 }
-        //
-        //                 var url = URL.createObjectURL(blob)
-        //                 this.screenWS.img.src = url;
-        //             } else if (/^data size:/.test(message.data)) {
-        //                 // console.log("receive message:", message.data)
-        //             } else if (/^rotation/.test(message.data)) {
-        //                 self.rotation = parseInt(message.data.substr('rotation '.length), 10);
-        //                 console.log(self.rotation)
-        //             } else {
-        //                 console.log("receive message:", message.data)
-        //             }
-        //         }
-        //
-        //         this.screenWS[i].ws.onclose = function (ev) {
-        //             console.log("screen websocket closed", ev.code)
-        //         }.bind(this)
-        //
-        //         this.screenWS[i].ws.onerror = function (ev) {
-        //             console.log("screen websocket error")
-        //         }
-        //     }
-        //
-        // },
         openScreenStream: function () {
           var self = this;
           var BLANK_IMG =
             'data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw=='
-          var ws = new WebSocket(this.deviceUrl.replace("http:", "ws:") + '/minicap');
+          // Use NIO WebSocket proxy instead of direct device minicap
+          var protocol = location.protocol === "https:" ? "wss:" : "ws:";
+          var ws = new WebSocket(protocol + "//" + location.host + "/nio/" + this.deviceUdid + "/ws");
+          ws.binaryType = 'arraybuffer';
           var canvas = document.getElementById('bgCanvas0')
           var ctx = canvas.getContext('2d');
 
@@ -388,584 +276,221 @@ window.app = new Vue({
           var imagePool = new ImagePool(100);
 
           ws.onopen = function (ev) {
-            console.log('screen websocket connected')
+            console.log('[NIO] screen websocket connected');
+            // Subscribe to screenshot streaming
+            ws.send(JSON.stringify({
+              type: "subscribe",
+              target: "screenshot",
+              interval: 100
+            }));
           };
 
-          // FIXME(ssx): use pubsub is better
           var imageBlobBuffer = self.imageBlobBuffer;
           var imageBlobMaxLength = 300;
 
           ws.onmessage = function (message) {
-            if (message.data instanceof Blob) {
-              console.log("image received");
-              $.publish("imagedata", message.data);
-
-              var blob = new Blob([message.data], {
-                type: 'image/jpeg'
-              })
+            // NIO sends JPEG as binary frames
+            if (message.data instanceof ArrayBuffer) {
+              var blob = new Blob([message.data], { type: 'image/jpeg' });
 
               imageBlobBuffer.push(blob);
-
               if (imageBlobBuffer.length > imageBlobMaxLength) {
                 imageBlobBuffer.shift();
               }
 
               var img = imagePool.next();
               img.onload = function () {
-                canvas.width = img.width
-                canvas.height = img.height
+                canvas.width = img.width;
+                canvas.height = img.height;
                 ctx.drawImage(img, 0, 0, img.width, img.height);
                 self.resizeScreen(img);
 
-
-                // Try to forcefully clean everything to get rid of memory
-                // leaks. Note self despite this effort, Chrome will still
-                // leak huge amounts of memory when the developer tools are
-                // open, probably to save the resources for inspection. When
-                // the developer tools are closed no memory is leaked.
-                img.onload = img.onerror = null
-                img.src = BLANK_IMG
-                img = null
-                blob = null
-
-                URL.revokeObjectURL(url)
-                url = null
+                img.onload = img.onerror = null;
+                img.src = BLANK_IMG;
+                img = null;
+                blob = null;
+                URL.revokeObjectURL(url);
+                url = null;
               }
 
               img.onerror = function () {
-                // Happily ignore. I suppose this shouldn't happen, but
-                // sometimes it does, presumably when we're loading images
-                // too quickly.
-
-                // Do the same cleanup here as in onload.
-                img.onload = img.onerror = null
-                img.src = BLANK_IMG
-                img = null
-                blob = null
-
-                URL.revokeObjectURL(url)
-                url = null
+                img.onload = img.onerror = null;
+                img.src = BLANK_IMG;
+                img = null;
+                blob = null;
+                URL.revokeObjectURL(url);
+                url = null;
               }
 
-              var url = URL.createObjectURL(blob)
+              var url = URL.createObjectURL(blob);
               img.src = url;
-            } else if (/^data size:/.test(message.data)) {
-              // console.log("receive message:", message.data)
-            } else if (/^rotation/.test(message.data)) {
-              self.rotation = parseInt(message.data.substr('rotation '.length), 10);
-              console.log(self.rotation)
-            } else {
-              console.log("receive message:", message.data)
+            } else if (typeof message.data === 'string') {
+              // Handle JSON text messages (status, errors)
+              try {
+                var data = JSON.parse(message.data);
+                console.log("[NIO] message:", data.type || data.status, data);
+              } catch(e) {
+                console.log("[NIO] text:", message.data);
+              }
             }
           }
 
           ws.onclose = function (ev) {
-            console.log("screen websocket closed", ev.code)
-          }.bind(this)
+            console.log("[NIO] screen websocket closed", ev.code);
+          }
 
           ws.onerror = function (ev) {
-            console.log("screen websocket error")
+            console.log("[NIO] screen websocket error");
           }
         },
-        // TODO change to minitouch version
-        // enableTouch: function () {
-        //     /**
-        //      * TOUCH HANDLING
-        //      */
-        //     var self = this;
-        //     var element = this.canvas.bg;
-        //
-        //     var screen = {
-        //         bounds: {}
-        //     }
-        //
-        //     // Main screen
-        //     var ws = new WebSocket(this.deviceUrl.replace("http:", "ws:") + "/minitouch")
-        //     ws.onerror = function (ev) {
-        //         console.log("minitouch websocket error:", ev)
-        //     }
-        //     ws.onmessage = function (ev) {
-        //         console.log("minitouch websocket receive message:", ev.data);
-        //     }
-        //     ws.onclose = function () {
-        //         console.log("minitouch websocket closed");
-        //     }
-        //     this.control_list[0] = MiniTouch.createNew(ws);
-        //
-        //     // Other screens
-        //     var ws_all = new WebSocket("ws://"+window.location.host+"/minitouch_all")
-        //     ws_all.onerror = function (ev) {
-        //         console.log("minitouch websocket error:", ev)
-        //     }
-        //     ws_all.onmessage = function (ev) {
-        //         console.log("minitouch websocket receive message:", ev.data);
-        //     }
-        //     ws_all.onclose = function () {
-        //         console.log("minitouch websocket closed");
-        //     }
-        //     this.control_list[1] = MiniTouch.createNew(ws_all);
-        //
-        //
-        //     var control = this.control_list
-        //     function calculateBounds() {
-        //         var el = element;
-        //         screen.bounds.w = el.offsetWidth
-        //         screen.bounds.h = el.offsetHeight
-        //         screen.bounds.x = 0
-        //         screen.bounds.y = 0
-        //
-        //         while (el.offsetParent) {
-        //             screen.bounds.x += el.offsetLeft
-        //             screen.bounds.y += el.offsetTop
-        //             el = el.offsetParent
-        //         }
-        //     }
-        //
-        //     function activeFinger(index, x, y, pressure) {
-        //         var scale = 0.5 + pressure
-        //         $(".finger-" + index)
-        //             .addClass("active")
-        //             .css("transform", 'translate3d(' + x + 'px,' + y + 'px,0)')
-        //     }
-        //
-        //     function deactiveFinger(index) {
-        //         $(".finger-" + index).removeClass("active")
-        //     }
-        //
-        //     function mouseDownListener(event) {
-        //         var e = event;
-        //         if (e.originalEvent) {
-        //             e = e.originalEvent
-        //         }
-        //         // Skip secondary click
-        //         if (e.which === 3) {
-        //             return
-        //         }
-        //         e.preventDefault()
-        //
-        //         fakePinch = e.altKey
-        //         calculateBounds()
-        //
-        //         var x = e.pageX - screen.bounds.x
-        //         var y = e.pageY - screen.bounds.y
-        //         var pressure = 0.5
-        //         activeFinger(0, e.pageX, e.pageY, pressure);
-        //
-        //         var scaled = coords(screen.bounds.w, screen.bounds.h, x, y, self.rotation);
-        //         for(var i=0;i<control.length;i++){
-        //             control[i].touchDown(0, scaled.xP, scaled.yP, pressure);
-        //             control[i].touchCommit();
-        //         }
-        //
-        //
-        //         element.removeEventListener('mousemove', mouseHoverListener);
-        //         element.addEventListener('mousemove', mouseMoveListener);
-        //         document.addEventListener('mouseup', mouseUpListener);
-        //         console.log("mouseDownListener end")
-        //     }
-        //
-        //     function mouseMoveListener(event) {
-        //         var e = event
-        //         if (e.originalEvent) {
-        //             e = e.originalEvent
-        //         }
-        //         // Skip secondary click
-        //         if (e.which === 3) {
-        //             return
-        //         }
-        //         e.preventDefault()
-        //
-        //         var pressure = 0.5
-        //         activeFinger(0, e.pageX, e.pageY, pressure);
-        //         var x = e.pageX - screen.bounds.x
-        //         var y = e.pageY - screen.bounds.y
-        //         var scaled = coords(screen.bounds.w, screen.bounds.h, x, y, self.rotation);
-        //         for(var i=0;i<control.length;i++) {
-        //             control[i].touchMove(0, scaled.xP, scaled.yP, pressure);
-        //             control[i].touchCommit();
-        //         }
-        //         console.log("mouseMoveListener end")
-        //     }
-        //
-        //     function mouseUpListener(event) {
-        //         var e = event
-        //         if (e.originalEvent) {
-        //             e = e.originalEvent
-        //         }
-        //         // Skip secondary click
-        //         if (e.which === 3) {
-        //             return
-        //         }
-        //         e.preventDefault()
-        //         for(var i=0;i<control.length;i++){
-        //             control[i].touchUp(0)
-        //             control[i].touchCommit();
-        //             stopMousing()
-        //         }
-        //         console.log("mouseUpListener end")
-        //         window.refersh()
-        //         console.log("refersh img")
-        //     }
-        //
-        //     function stopMousing() {
-        //         element.removeEventListener('mousemove', mouseMoveListener);
-        //         // element.addEventListener('mousemove', mouseHoverListener);
-        //         document.removeEventListener('mouseup', mouseUpListener);
-        //         deactiveFinger(0);
-        //     }
-        //
-        //     function mouseHoverListener(event) {
-        //         var e = event;
-        //         if (e.originalEvent) {
-        //             e = e.originalEvent
-        //         }
-        //         // Skip secondary click
-        //         if (e.which === 3) {
-        //             return
-        //         }
-        //         e.preventDefault()
-        //
-        //         var x = e.pageX - screen.bounds.x
-        //         var y = e.pageY - screen.bounds.y
-        //     }
-        //
-        //     function markPosition(pos) {
-        //         var ctx = self.canvas.fg.getContext("2d");
-        //         ctx.fillStyle = '#ff0000'; // red
-        //         ctx.beginPath()
-        //         ctx.arc(pos.x, pos.y, 12, 0, 2 * Math.PI)
-        //         ctx.closePath()
-        //         ctx.fill()
-        //
-        //         ctx.fillStyle = "#fff"; // white
-        //         ctx.beginPath()
-        //         ctx.arc(pos.x, pos.y, 8, 0, 2 * Math.PI)
-        //         ctx.closePath()
-        //         ctx.fill();
-        //     }
-        //
-        //     var wheelTimer, fromYP;
-        //
-        //     function mouseWheelDelayTouchUp() {
-        //         clearTimeout(wheelTimer);
-        //         wheelTimer = setTimeout(function () {
-        //             fromYP = null;
-        //             for(var i=0;i<control.length;i++) {
-        //                 control[i].touchUp(1)
-        //                 control[i].touchCommit();
-        //             }
-        //             // deactiveFinger(0);
-        //             // deactiveFinger(1);
-        //         }, 100)
-        //     }
-        //
-        //     function mouseWheelListener(event) {
-        //         var e = event;
-        //         if (e.originalEvent) {
-        //             e = e.originalEvent
-        //         }
-        //         e.preventDefault()
-        //         calculateBounds()
-        //
-        //         var x = e.pageX - screen.bounds.x
-        //         var y = e.pageY - screen.bounds.y
-        //         var pressure = 0.5;
-        //         var scaled;
-        //
-        //         if (!fromYP) {
-        //             fromYP = y / screen.bounds.h; // display Y percent
-        //             // touch down when first detect mousewheel
-        //             scaled = coords(screen.bounds.w, screen.bounds.h, x, y, self.rotation);
-        //             for(var i=0;i<control.length;i++) {
-        //                 control[i].touchDown(1, scaled.xP, scaled.yP, pressure);
-        //                 control[i].touchCommit();
-        //             }
-        //             // activeFinger(0, e.pageX, e.pageY, pressure);
-        //         }
-        //         // caculate position after scroll
-        //         var toYP = fromYP + (event.wheelDeltaY < 0 ? -0.05 : 0.05);
-        //         toYP = Math.max(0, Math.min(1, toYP));
-        //
-        //         var step = Math.max((toYP - fromYP) / 5, 0.01) * (event.wheelDeltaY < 0 ? -1 : 1);
-        //         for (var yP = fromYP; yP < 1 && yP > 0 && Math.abs(yP - toYP) > 0.0001; yP += step) {
-        //             y = screen.bounds.h * yP;
-        //             var pageY = y + screen.bounds.y;
-        //             scaled = coords(screen.bounds.w, screen.bounds.h, x, y, self.rotation);
-        //             // activeFinger(1, e.pageX, pageY, pressure);
-        //             for(var i=0;i<control.length;i++) {
-        //                 control[i].touchMove(1, scaled.xP, scaled.yP, pressure);
-        //                 control[i].touchWait(10);
-        //                 control[i].touchCommit();
-        //             }
-        //         }
-        //         fromYP = toYP;
-        //         mouseWheelDelayTouchUp()
-        //         console.log("mouseWheelListener end")
-        //     }
-        //
-        //     /* bind listeners */
-        //     element.addEventListener('mousedown', mouseDownListener);
-        //     element.addEventListener('mousemove', mouseHoverListener);
-        //     element.addEventListener('mousewheel', mouseWheelListener);
-        // }
+        // Send touch to all target devices via server proxy
+        sendTouchToDevices: function (x, y, x2, y2, duration) {
+            var targets = this.getTargetDevices();
+            for (var i = 0; i < targets.length; i++) {
+                var data = { x: x, y: y };
+                if (x2 !== undefined && y2 !== undefined) {
+                    data.x2 = x2;
+                    data.y2 = y2;
+                    data.duration = duration || 200;
+                }
+                $.ajax({
+                    url: "/inspector/" + targets[i].udid + "/touch",
+                    method: "POST",
+                    contentType: "application/json",
+                    data: JSON.stringify(data)
+                });
+            }
+        },
         enableTouch: function () {
             /**
-             * TOUCH HANDLING
+             * TOUCH HANDLING — uses server proxy HTTP endpoints instead of minitouch WebSocket
              */
             var self = this;
             var element = this.canvas.bg;
 
-            // var canvas = document.getElementById('bgCanvas0')
+            var screen = { bounds: {} }
+            var touchStartPos = null;
 
-            var screen = {
-                bounds: {}
-            }
-            // Single device controlling multiple devices
-            for (var i=0;i<deviceList.length;i++) {
-                var ws = new WebSocket("ws://" + deviceList[i].src + ":" + deviceList[i].port + "/minitouch")
-                ws.onerror = function (ev) {
-                    console.log("minitouch websocket error:", ev)
-                }
-                ws.onmessage = function (ev) {
-                    console.log("minitouch websocket receive message:", ev.data);
-                }
-                ws.onclose = function () {
-                    console.log("minitouch websocket closed");
-                }
-                this.control_list[i] = MiniTouch.createNew(ws);
-            }
-
-
-            var control = this.control_list
             function calculateBounds() {
                 var el = element;
-                screen.bounds.w = el.offsetWidth
-                screen.bounds.h = el.offsetHeight
-                screen.bounds.x = 0
-                screen.bounds.y = 0
-
+                screen.bounds.w = el.offsetWidth;
+                screen.bounds.h = el.offsetHeight;
+                screen.bounds.x = 0;
+                screen.bounds.y = 0;
                 while (el.offsetParent) {
-                    screen.bounds.x += el.offsetLeft
-                    screen.bounds.y += el.offsetTop
-                    el = el.offsetParent
+                    screen.bounds.x += el.offsetLeft;
+                    screen.bounds.y += el.offsetTop;
+                    el = el.offsetParent;
                 }
             }
 
-            function activeFinger(index, x, y, pressure) {
-                var scale = 0.5 + pressure
+            function activeFinger(index, x, y) {
                 $(".finger-" + index)
                     .addClass("active")
-                    .css("transform", 'translate3d(' + x + 'px,' + y + 'px,0)')
+                    .css("transform", 'translate3d(' + x + 'px,' + y + 'px,0)');
             }
 
             function deactiveFinger(index) {
-                $(".finger-" + index).removeClass("active")
+                $(".finger-" + index).removeClass("active");
             }
 
-            function coord(event) {
-                var e = event;
-                if (e.originalEvent) {
-                  e = e.originalEvent
-                }
-                calculateBounds()
-                var x = e.pageX - screen.bounds.x
-                var y = e.pageY - screen.bounds.y
+            // Convert screen coordinates to device pixel coordinates
+            function toDeviceCoords(pageX, pageY) {
+                calculateBounds();
+                var x = pageX - screen.bounds.x;
+                var y = pageY - screen.bounds.y;
                 var px = x / screen.bounds.w;
                 var py = y / screen.bounds.h;
+                // Use master device resolution for coordinate mapping
+                var master = self.deviceList[self.masterIndex];
+                var devW = (master && master.width) || 1080;
+                var devH = (master && master.height) || 1920;
                 return {
-                  px: px,
-                  py: py,
-                  x: Math.floor(px * element.width),
-                  y: Math.floor(py * element.height),
-                }
-            }
-
-            function mouseDownListener(event) {
-                var e = event;
-                if (e.originalEvent) {
-                    e = e.originalEvent
-                }
-                // Skip secondary click
-                if (e.which === 3) {
-                    return
-                }
-                e.preventDefault()
-
-                fakePinch = e.altKey
-                calculateBounds()
-
-                var x = e.pageX - screen.bounds.x
-                var y = e.pageY - screen.bounds.y
-                var pressure = 0.5
-                activeFinger(0, e.pageX, e.pageY, pressure);
-
-                var scaled = coords(screen.bounds.w, screen.bounds.h, x, y, self.rotation);
-                for(var i=0;i<control.length;i++){
-                    control[i].touchDown(0, scaled.xP, scaled.yP, pressure);
-                    control[i].touchCommit();
-                }
-
-
-                element.removeEventListener('mousemove', mouseHoverListener);
-                element.addEventListener('mousemove', mouseMoveListener);
-                document.addEventListener('mouseup', mouseUpListener);
-                console.log("mouseDownListener end")
-            }
-
-            function mouseMoveListener(event) {
-                var e = event
-                if (e.originalEvent) {
-                    e = e.originalEvent
-                }
-                // Skip secondary click
-                if (e.which === 3) {
-                    return
-                }
-                e.preventDefault()
-
-                var pressure = 0.5
-                activeFinger(0, e.pageX, e.pageY, pressure);
-                var x = e.pageX - screen.bounds.x
-                var y = e.pageY - screen.bounds.y
-                var scaled = coords(screen.bounds.w, screen.bounds.h, x, y, self.rotation);
-                for(var i=0;i<control.length;i++) {
-                    control[i].touchMove(0, scaled.xP, scaled.yP, pressure);
-                    control[i].touchCommit();
-                }
-                console.log("mouseMoveListener end")
-            }
-
-            function mouseUpListener(event) {
-                var e = event
-                if (e.originalEvent) {
-                    e = e.originalEvent
-                }
-                // Skip secondary click
-                if (e.which === 3) {
-                    return
-                }
-                e.preventDefault()
-                for(var i=0;i<control.length;i++){
-                    control[i].touchUp(0)
-                    control[i].touchCommit();
-                    stopMousing()
-                }
-                var pos = coord(e);
-                // change precision
-                pos.px = Math.floor(pos.px * 1000) / 1000;
-                pos.py = Math.floor(pos.py * 1000) / 1000;
-                pos.x = Math.floor(pos.px * element.width);
-                pos.y = Math.floor(pos.py * element.height);
-                self.cursor = pos;
-                markPosition(self.cursor)
-                console.log("mouseUpListener end")
-                window.refersh()
-                console.log("refersh img")
-            }
-
-            function stopMousing() {
-                element.removeEventListener('mousemove', mouseMoveListener);
-                // element.addEventListener('mousemove', mouseHoverListener);
-                document.removeEventListener('mouseup', mouseUpListener);
-                deactiveFinger(0);
-            }
-
-            function mouseHoverListener(event) {
-                var e = event;
-                if (e.originalEvent) {
-                    e = e.originalEvent
-                }
-                // Skip secondary click
-                if (e.which === 3) {
-                    return
-                }
-                e.preventDefault()
-
-                var x = e.pageX - screen.bounds.x
-                var y = e.pageY - screen.bounds.y
-
-                if (self.cursor.px) {
-                  markPosition(self.cursor)
-                }
+                    px: px,
+                    py: py,
+                    x: Math.floor(px * devW),
+                    y: Math.floor(py * devH),
+                };
             }
 
             function markPosition(pos) {
                 var ctx = self.canvas.fg.getContext("2d");
-                ctx.fillStyle = '#ff0000'; // red
-                ctx.beginPath()
-                ctx.arc(pos.x, pos.y, 12, 0, 2 * Math.PI)
-                ctx.closePath()
-                ctx.fill()
+                ctx.fillStyle = '#ff0000';
+                ctx.beginPath();
+                ctx.arc(pos.x, pos.y, 12, 0, 2 * Math.PI);
+                ctx.closePath();
+                ctx.fill();
 
-                ctx.fillStyle = "#fff"; // white
-                ctx.beginPath()
-                ctx.arc(pos.x, pos.y, 8, 0, 2 * Math.PI)
-                ctx.closePath()
+                ctx.fillStyle = "#fff";
+                ctx.beginPath();
+                ctx.arc(pos.x, pos.y, 8, 0, 2 * Math.PI);
+                ctx.closePath();
                 ctx.fill();
             }
 
-            var wheelTimer, fromYP;
+            function mouseDownListener(event) {
+                var e = event.originalEvent || event;
+                if (e.which === 3) return;
+                e.preventDefault();
 
-            function mouseWheelDelayTouchUp() {
-                clearTimeout(wheelTimer);
-                wheelTimer = setTimeout(function () {
-                    fromYP = null;
-                    for(var i=0;i<control.length;i++) {
-                        control[i].touchUp(1)
-                        control[i].touchCommit();
-                    }
-                    // deactiveFinger(0);
-                    // deactiveFinger(1);
-                }, 100)
+                activeFinger(0, e.pageX, e.pageY);
+                touchStartPos = toDeviceCoords(e.pageX, e.pageY);
+
+                element.addEventListener('mousemove', mouseMoveListener);
+                document.addEventListener('mouseup', mouseUpListener);
+            }
+
+            function mouseMoveListener(event) {
+                var e = event.originalEvent || event;
+                if (e.which === 3) return;
+                e.preventDefault();
+                activeFinger(0, e.pageX, e.pageY);
+            }
+
+            function mouseUpListener(event) {
+                var e = event.originalEvent || event;
+                if (e.which === 3) return;
+                e.preventDefault();
+
+                var endPos = toDeviceCoords(e.pageX, e.pageY);
+                var dx = Math.abs(endPos.x - touchStartPos.x);
+                var dy = Math.abs(endPos.y - touchStartPos.y);
+
+                if (dx < 10 && dy < 10) {
+                    // Tap — start and end positions are close enough
+                    self.sendTouchToDevices(touchStartPos.x, touchStartPos.y);
+                } else {
+                    // Swipe — significant movement detected
+                    self.sendTouchToDevices(touchStartPos.x, touchStartPos.y, endPos.x, endPos.y, 200);
+                }
+
+                // Update cursor marker on canvas
+                var canvasPx = Math.floor(endPos.px * element.width);
+                var canvasPy = Math.floor(endPos.py * element.height);
+                self.cursor = { px: endPos.px, py: endPos.py, x: canvasPx, y: canvasPy };
+                markPosition(self.cursor);
+
+                stopMousing();
+                touchStartPos = null;
+            }
+
+            function stopMousing() {
+                element.removeEventListener('mousemove', mouseMoveListener);
+                document.removeEventListener('mouseup', mouseUpListener);
+                deactiveFinger(0);
             }
 
             function mouseWheelListener(event) {
-                var e = event;
-                if (e.originalEvent) {
-                    e = e.originalEvent
-                }
-                e.preventDefault()
-                calculateBounds()
-
-                var x = e.pageX - screen.bounds.x
-                var y = e.pageY - screen.bounds.y
-                var pressure = 0.5;
-                var scaled;
-
-                if (!fromYP) {
-                    fromYP = y / screen.bounds.h; // display Y percent
-                    // touch down when first detect mousewheel
-                    scaled = coords(screen.bounds.w, screen.bounds.h, x, y, self.rotation);
-                    for(var i=0;i<control.length;i++) {
-                        control[i].touchDown(1, scaled.xP, scaled.yP, pressure);
-                        control[i].touchCommit();
-                    }
-                    // activeFinger(0, e.pageX, e.pageY, pressure);
-                }
-                // caculate position after scroll
-                var toYP = fromYP + (event.wheelDeltaY < 0 ? -0.05 : 0.05);
-                toYP = Math.max(0, Math.min(1, toYP));
-
-                var step = Math.max((toYP - fromYP) / 5, 0.01) * (event.wheelDeltaY < 0 ? -1 : 1);
-                for (var yP = fromYP; yP < 1 && yP > 0 && Math.abs(yP - toYP) > 0.0001; yP += step) {
-                    y = screen.bounds.h * yP;
-                    var pageY = y + screen.bounds.y;
-                    scaled = coords(screen.bounds.w, screen.bounds.h, x, y, self.rotation);
-                    // activeFinger(1, e.pageX, pageY, pressure);
-                    for(var i=0;i<control.length;i++) {
-                        control[i].touchMove(1, scaled.xP, scaled.yP, pressure);
-                        control[i].touchWait(10);
-                        control[i].touchCommit();
-                    }
-                }
-                fromYP = toYP;
-                mouseWheelDelayTouchUp()
-                console.log("mouseWheelListener end")
+                var e = event.originalEvent || event;
+                e.preventDefault();
+                var pos = toDeviceCoords(e.pageX, e.pageY);
+                var scrollAmount = (e.wheelDeltaY || -e.deltaY) < 0 ? 300 : -300;
+                // Simulate swipe for scroll
+                self.sendTouchToDevices(pos.x, pos.y, pos.x, pos.y + scrollAmount, 300);
             }
 
             /* bind listeners */
             element.addEventListener('mousedown', mouseDownListener);
-            // element.addEventListener('mousemove', mouseHoverListener);
             element.addEventListener('mousewheel', mouseWheelListener);
         }
     }

@@ -58,6 +58,7 @@
             </ul>
         </div>
     </nav>
+    {% raw %}
     <div class="container-fluid" id="app">
         <table class="table">
             <thead>
@@ -83,13 +84,15 @@
                         </span>
                     </td>
                     <td>
-                        <i class="fa fa-mobile" v-for="d in p.devices" style="padding-right: 5px"></i>
+                        <span v-text="p.device_count"></span>
+                        <i class="fa fa-mobile" style="padding-left: 3px"></i>
                     </td>
                     <td v-text="p.id"></td>
                 </tr>
             </tbody>
         </table>
     </div>
+    {% endraw %}
     <script>
         new Vue({
             el: "#app",
@@ -99,10 +102,10 @@
             mounted: function () {
                 $.ajax({
                     method: "GET",
-                    url: "/providers?json",
+                    url: "/api/v1/providers",
                 }).then(function (ret) {
                     console.log(ret)
-                    this.providers = ret;
+                    this.providers = ret.data;
                 }.bind(this))
             },
             methods: {
@@ -116,7 +119,7 @@
                     console.log("update notes", v.notes)
                     $.ajax({
                         method: "PUT",
-                        url: "/providers/" + v.id,
+                        url: "/api/v1/providers/" + v.id,
                         data: JSON.stringify({
                             "notes": newNotes,
                         })

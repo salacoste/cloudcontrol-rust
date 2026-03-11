@@ -1,55 +1,36 @@
-descption:  default config
-# Database configuration (switched to SQLite, MongoDB not needed)
+# CloudControl server configuration
+# Story 12-4: Configurable server settings
+
+description: "default development config"
+
+# Server configuration
+server:
+  port: 8000
+
+# Connection pool configuration (Story 12-4)
+pool:
+  max_size: 1200
+  idle_timeout_secs: 600
+
+# Cache configuration (Story 12-4)
+cache:
+  device_info_max: 500
+  device_info_ttl_secs: 300
+
+# Database configuration (SQLite)
 db_configs:
   type: sqlite
   db_name: cloudcontrol.db
-  # The following MongoDB config is deprecated, kept for reference only
-  # url: mongodb://127.0.0.1:27017
-  # host: 127.0.0.1
-  # port: 27017
-  user:
-  passwd:
-# Redis configuration
-redis_configs:
-  redis_url: redis://:BIgsfintech27581@172.17.0.168:6379/15
-#db_configs:
-#  type: mongo
-#  host: 127.0.0.1
-#  port: 27017
-#  #    user : admin
-#  #    user1 : admin
-#  #    passwd : Mongo2018914
-#  db_name: online_data
-#  db_name1: spider_data
-# External service configuration
-  db_name1: spider_data
 
-# Kafka message queue
-kafka_configs:
-  topic: lang
-  # Kafka server, usually a cluster address, single IP also works
-  bootstrap_servers: "172.17.0.212:9090"
-  # Consumer group ID must be unique, consumers in the same group do not consume duplicate data
-  group_id: group_lang
+# API authentication (optional — if not set, all endpoints are open)
+# api_key: "your-secret-key-here"
 
-rest_server_configs:
-  host: 0.0.0.0
-  port: 55555
-  debug: True
-#influxdb
-influxdb_configs:
-  host: 172.17.0.212
-#  host: 127.0.0.1
-  port: 8086
-  user: admin
-  passwd: adminATinfluxdb2016
-  db_name: op_spider
-
-# Spider configuration
-SPIDER:
-  MIDDLEWARE: "common.middleware.RequestsMiddleware"
-
-
-# Server port
-server:
-  port: 8000
+# Rate limiting (optional — if not set, rate limiting is disabled)
+# rate_limit:
+#   requests_per_window: 100   # max requests per IP per window
+#   window_secs: 60            # window size in seconds
+#   category_limits:           # per-category overrides
+#     screenshot: 30
+#     batch: 10
+#     control: 60
+#     websocket: 5

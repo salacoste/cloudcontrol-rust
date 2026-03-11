@@ -5,11 +5,9 @@
 
 use crate::services::phone_service::PhoneService;
 use crate::utils::host_ip::{get_primary_subnet, get_local_subnets};
-use chrono::Utc;
 use futures::future::join_all;
 use reqwest::Client;
 use serde::Deserialize;
-use serde_json::json;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -234,6 +232,7 @@ impl WifiDiscovery {
     }
 
     /// Build device data from ATX agent info.
+    #[cfg(test)]
     fn build_device_data(info: &Value, ip: &str, port: u16) -> Value {
         let serial = info
             .get("serial")
@@ -249,9 +248,9 @@ impl WifiDiscovery {
         // Generate UDID matching existing pattern: {serial}-{model}
         let udid = format!("{}-{}", serial, model.replace(' ', "_"));
 
-        let now = Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
+        let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
 
-        json!({
+        serde_json::json!({
             "udid": udid,
             "serial": serial,
             "ip": ip.trim(),
@@ -262,10 +261,10 @@ impl WifiDiscovery {
             "sdk": info.get("sdk").and_then(|v| v.as_i64()).unwrap_or(30),
             "agentVersion": info.get("agentVersion").and_then(|v| v.as_str()).unwrap_or(""),
             "hwaddr": info.get("hwaddr").and_then(|v| v.as_str()).unwrap_or(""),
-            "display": info.get("display").cloned().unwrap_or_else(|| json!({"width": 1080, "height": 1920})),
-            "battery": info.get("battery").cloned().unwrap_or_else(|| json!({"level": 0})),
-            "memory": info.get("memory").cloned().unwrap_or_else(|| json!({"total": 0})),
-            "cpu": info.get("cpu").cloned().unwrap_or_else(|| json!({"cores": 0})),
+            "display": info.get("display").cloned().unwrap_or_else(|| serde_json::json!({"width": 1080, "height": 1920})),
+            "battery": info.get("battery").cloned().unwrap_or_else(|| serde_json::json!({"level": 0})),
+            "memory": info.get("memory").cloned().unwrap_or_else(|| serde_json::json!({"total": 0})),
+            "cpu": info.get("cpu").cloned().unwrap_or_else(|| serde_json::json!({"cores": 0})),
             "device_type": "wifi",
             "present": true,
             "ready": true,

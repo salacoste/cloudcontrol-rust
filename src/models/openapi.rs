@@ -10,6 +10,10 @@ pub struct OpenApiDocument {
     pub info: Info,
     pub servers: Vec<Server>,
     pub paths: std::collections::HashMap<String, PathItem>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub components: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub security: Option<Vec<serde_json::Value>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -115,6 +119,26 @@ pub fn generate_openapi_spec() -> OpenApiDocument {
             description: "Development server".to_string(),
         }],
         paths: generate_paths(),
+        components: Some(serde_json::json!({
+            "securitySchemes": {
+                "ApiKeyHeader": {
+                    "type": "apiKey",
+                    "in": "header",
+                    "name": "Authorization",
+                    "description": "API key via Bearer token: 'Bearer <api_key>'"
+                },
+                "ApiKeyQuery": {
+                    "type": "apiKey",
+                    "in": "query",
+                    "name": "api_key",
+                    "description": "API key via query parameter"
+                }
+            }
+        })),
+        security: Some(vec![
+            serde_json::json!({"ApiKeyHeader": []}),
+            serde_json::json!({"ApiKeyQuery": []}),
+        ]),
     }
 }
 
@@ -311,6 +335,210 @@ fn generate_paths() -> std::collections::HashMap<String, PathItem> {
         delete: None,
     });
 
+    // GET /api/v1/devices/{udid}/hierarchy (Story 10-4)
+    paths.insert("/api/v1/devices/{udid}/hierarchy".to_string(), PathItem {
+        get: Some(Operation {
+            summary: "Get UI hierarchy".to_string(),
+            operation_id: "hierarchy".to_string(),
+            description: Some("Returns the device UI hierarchy tree as JSON".to_string()),
+            parameters: Some(vec![udid_path_param()]),
+            request_body: None,
+            responses: Some(generate_success_response()),
+        }),
+        post: None,
+        put: None,
+        delete: None,
+    });
+
+    // POST /api/v1/devices/{udid}/upload (Story 10-4)
+    paths.insert("/api/v1/devices/{udid}/upload".to_string(), PathItem {
+        get: None,
+        post: Some(Operation {
+            summary: "Upload file to device".to_string(),
+            operation_id: "upload".to_string(),
+            description: Some("Uploads a file to the device. Images go to /sdcard/DCIM/, videos to /sdcard/Movies/, others to /sdcard/Download/".to_string()),
+            parameters: Some(vec![udid_path_param()]),
+            request_body: Some(RequestBody {
+                description: "File to upload (multipart/form-data)".to_string(),
+                required: true,
+                content: {
+                    let mut c = std::collections::HashMap::new();
+                    c.insert("multipart/form-data".to_string(), MediaType {
+                        schema: Schema {
+                            schema_type: "object".to_string(),
+                            properties: Some({
+                                let mut p = std::collections::HashMap::new();
+                                p.insert("file".to_string(), Schema {
+                                    schema_type: "string".to_string(),
+                                    properties: None,
+                                    items: None,
+                                    required: None,
+                                    description: Some("File to upload (max 100 MB). Images → /sdcard/DCIM/, videos → /sdcard/Movies/, others → /sdcard/Download/".to_string()),
+                                    example: None,
+                                });
+                                p
+                            }),
+                            items: None,
+                            required: Some(vec!["file".to_string()]),
+                            description: None,
+                            example: None,
+                        },
+                    });
+                    c
+                },
+            }),
+            responses: Some(generate_success_response()),
+        }),
+        put: None,
+        delete: None,
+    });
+
+    // POST /api/v1/devices/{udid}/rotation (Story 10-4)
+    paths.insert("/api/v1/devices/{udid}/rotation".to_string(), PathItem {
+        get: None,
+        post: Some(Operation {
+            summary: "Fix device rotation".to_string(),
+            operation_id: "rotation".to_string(),
+            description: Some("Triggers a rotation fix via the ATX agent on the device".to_string()),
+            parameters: Some(vec![udid_path_param()]),
+            request_body: None,
+            responses: Some(generate_success_response()),
+        }),
+        put: None,
+        delete: None,
+    });
+
+    // GET /api/v1/videos (Story 11-1, enhanced in 11-2)
+    paths.insert("/api/v1/videos".to_string(), PathItem {
+        get: Some(Operation {
+            summary: "List video recordings".to_string(),
+            operation_id: "listVideos".to_string(),
+            description: Some("Returns all video recordings with metadata. Supports optional query filters.".to_string()),
+            parameters: Some(vec![
+                Parameter {
+                    name: "udid".to_string(),
+                    in_location: "query".to_string(),
+                    required: false,
+                    description: Some("Filter recordings by device UDID".to_string()),
+                    schema: Some(Schema {
+                        schema_type: "string".to_string(),
+                        properties: None,
+                        items: None,
+                        required: None,
+                        description: None,
+                        example: None,
+                    }),
+                },
+                Parameter {
+                    name: "status".to_string(),
+                    in_location: "query".to_string(),
+                    required: false,
+                    description: Some("Filter recordings by status (recording, completed, failed, recovered)".to_string()),
+                    schema: Some(Schema {
+                        schema_type: "string".to_string(),
+                        properties: None,
+                        items: None,
+                        required: None,
+                        description: None,
+                        example: None,
+                    }),
+                },
+            ]),
+            request_body: None,
+            responses: Some(generate_success_response()),
+        }),
+        post: None,
+        put: None,
+        delete: None,
+    });
+
+    // GET/DELETE /api/v1/videos/{id} (Story 11-1)
+    let video_id_param = Parameter {
+        name: "id".to_string(),
+        in_location: "path".to_string(),
+        required: true,
+        description: Some("Video recording ID".to_string()),
+        schema: Some(Schema {
+            schema_type: "string".to_string(),
+            properties: None,
+            items: None,
+            required: None,
+            description: None,
+            example: None,
+        }),
+    };
+
+    paths.insert("/api/v1/videos/{id}".to_string(), PathItem {
+        get: Some(Operation {
+            summary: "Get video recording".to_string(),
+            operation_id: "getVideo".to_string(),
+            description: Some("Returns metadata for a specific video recording".to_string()),
+            parameters: Some(vec![video_id_param.clone()]),
+            request_body: None,
+            responses: Some(generate_success_response()),
+        }),
+        post: None,
+        put: None,
+        delete: Some(Operation {
+            summary: "Delete video recording".to_string(),
+            operation_id: "deleteVideo".to_string(),
+            description: Some("Deletes a video recording and its file".to_string()),
+            parameters: Some(vec![video_id_param.clone()]),
+            request_body: None,
+            responses: Some(generate_success_response()),
+        }),
+    });
+
+    // GET /api/v1/videos/{id}/download (Story 11-1)
+    paths.insert("/api/v1/videos/{id}/download".to_string(), PathItem {
+        get: Some(Operation {
+            summary: "Download video file".to_string(),
+            operation_id: "downloadVideo".to_string(),
+            description: Some("Downloads the MP4 video file for a completed recording".to_string()),
+            parameters: Some(vec![video_id_param.clone()]),
+            request_body: None,
+            responses: Some({
+                let mut r = std::collections::HashMap::new();
+                r.insert("200".to_string(), Response {
+                    description: "MP4 video file".to_string(),
+                    content: Some({
+                        let mut c = std::collections::HashMap::new();
+                        c.insert("video/mp4".to_string(), MediaType {
+                            schema: Schema {
+                                schema_type: "string".to_string(),
+                                properties: None,
+                                items: None,
+                                required: None,
+                                description: Some("Binary MP4 file".to_string()),
+                                example: None,
+                            },
+                        });
+                        c
+                    }),
+                });
+                r
+            }),
+        }),
+        post: None,
+        put: None,
+        delete: None,
+    });
+
+    // POST /api/v1/videos/{id}/stop (Story 11-1)
+    paths.insert("/api/v1/videos/{id}/stop".to_string(), PathItem {
+        get: None,
+        post: Some(Operation {
+            summary: "Stop video recording".to_string(),
+            operation_id: "stopVideo".to_string(),
+            description: Some("Force-stops an in-progress video recording".to_string()),
+            parameters: Some(vec![video_id_param]),
+            request_body: None,
+            responses: Some(generate_success_response()),
+        }),
+        put: None,
+        delete: None,
+    });
+
     // POST /api/v1/batch/tap
     paths.insert("/api/v1/batch/tap".to_string(), PathItem {
         get: None,
@@ -413,6 +641,28 @@ fn generate_paths() -> std::collections::HashMap<String, PathItem> {
         delete: None,
     });
 
+    // GET /api/v1/version
+    paths.insert("/api/v1/version".to_string(), PathItem {
+        get: Some(Operation {
+            summary: "Server version info".to_string(),
+            operation_id: "getVersion".to_string(),
+            description: Some("Returns server name, version, and identifier for compatibility verification".to_string()),
+            parameters: None,
+            request_body: None,
+            responses: Some({
+                let mut r = std::collections::HashMap::new();
+                r.insert("200".to_string(), Response {
+                    description: "Server version information with name, version, and server identifier".to_string(),
+                    content: None,
+                });
+                r
+            }),
+        }),
+        post: None,
+        put: None,
+        delete: None,
+    });
+
     // GET /api/v1/ws/nio (WebSocket upgrade)
     paths.insert("/api/v1/ws/nio".to_string(), PathItem {
         get: Some(Operation {
@@ -456,8 +706,16 @@ fn udid_path_param() -> Parameter {
     }
 }
 
+fn rate_limit_response() -> Response {
+    Response {
+        description: "Rate limit exceeded. Retry after the number of seconds in the Retry-After header.".to_string(),
+        content: None,
+    }
+}
+
 fn generate_list_response() -> std::collections::HashMap<String, Response> {
     let mut responses = std::collections::HashMap::new();
+    responses.insert("429".to_string(), rate_limit_response());
     responses.insert("200".to_string(), Response {
         description: "List of devices".to_string(),
         content: Some({
@@ -541,6 +799,7 @@ fn generate_list_response() -> std::collections::HashMap<String, Response> {
 
 fn generate_device_response() -> std::collections::HashMap<String, Response> {
     let mut responses = std::collections::HashMap::new();
+    responses.insert("429".to_string(), rate_limit_response());
     responses.insert("200".to_string(), Response {
         description: "Device information".to_string(),
         content: None,
@@ -554,6 +813,7 @@ fn generate_device_response() -> std::collections::HashMap<String, Response> {
 
 fn generate_screenshot_response() -> std::collections::HashMap<String, Response> {
     let mut responses = std::collections::HashMap::new();
+    responses.insert("429".to_string(), rate_limit_response());
     responses.insert("200".to_string(), Response {
         description: "Screenshot data".to_string(),
         content: None,
@@ -563,6 +823,7 @@ fn generate_screenshot_response() -> std::collections::HashMap<String, Response>
 
 fn generate_success_response() -> std::collections::HashMap<String, Response> {
     let mut responses = std::collections::HashMap::new();
+    responses.insert("429".to_string(), rate_limit_response());
     responses.insert("200".to_string(), Response {
         description: "Operation successful".to_string(),
         content: None,
@@ -659,6 +920,7 @@ fn generate_batch_tap_request_body() -> std::collections::HashMap<String, MediaT
 
 fn generate_batch_response() -> std::collections::HashMap<String, Response> {
     let mut responses = std::collections::HashMap::new();
+    responses.insert("429".to_string(), rate_limit_response());
     responses.insert("200".to_string(), Response {
         description: "Batch operation result".to_string(),
         content: None,
@@ -866,6 +1128,7 @@ fn generate_batch_input_request_body() -> std::collections::HashMap<String, Medi
 
 fn generate_status_response() -> std::collections::HashMap<String, Response> {
     let mut responses = std::collections::HashMap::new();
+    responses.insert("429".to_string(), rate_limit_response());
     responses.insert("200".to_string(), Response {
         description: "Device farm status summary with device counts by status and average battery".to_string(),
         content: None,
@@ -875,6 +1138,7 @@ fn generate_status_response() -> std::collections::HashMap<String, Response> {
 
 fn generate_health_response() -> std::collections::HashMap<String, Response> {
     let mut responses = std::collections::HashMap::new();
+    responses.insert("429".to_string(), rate_limit_response());
     responses.insert("200".to_string(), Response {
         description: "System is healthy".to_string(),
         content: None,
@@ -888,6 +1152,7 @@ fn generate_health_response() -> std::collections::HashMap<String, Response> {
 
 fn generate_metrics_response() -> std::collections::HashMap<String, Response> {
     let mut responses = std::collections::HashMap::new();
+    responses.insert("429".to_string(), rate_limit_response());
     responses.insert("200".to_string(), Response {
         description: "Prometheus-compatible plain text metrics".to_string(),
         content: Some({

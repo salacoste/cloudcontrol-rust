@@ -510,7 +510,7 @@ pub async fn start_playback(
                 }
             };
 
-            tokio::spawn(async move {
+            let playback_handle = tokio::spawn(async move {
                 let base_delay_ms: u64 = 500;
                 let delay = std::time::Duration::from_millis(
                     (base_delay_ms as f64 / speed as f64) as u64
@@ -576,6 +576,9 @@ pub async fn start_playback(
                 }
                 tracing::info!("[PLAYBACK] Completed all {} actions on device {}", actions.len(), udid);
             });
+
+            // Store JoinHandle for graceful shutdown (Story 12-3)
+            state.recording_service.store_playback_handle(&target_device_udid, playback_handle).await;
 
             HttpResponse::Ok().json(response)
         }

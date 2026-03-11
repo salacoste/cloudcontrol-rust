@@ -97,9 +97,10 @@ async fn resolve_device_connection(
 /// Create standardized error response
 fn error_response(code: &str, message: &str) -> HttpResponse {
     let status = match code {
-        "ERR_DEVICE_NOT_FOUND" => actix_web::http::StatusCode::NOT_FOUND,
-        "ERR_DEVICE_DISCONNECTED" => actix_web::http::StatusCode::SERVICE_UNAVAILABLE,
+        "ERR_DEVICE_NOT_FOUND" | "ERR_RECORDING_NOT_FOUND" | "ERR_FILE_NOT_FOUND" => actix_web::http::StatusCode::NOT_FOUND,
+        "ERR_DEVICE_DISCONNECTED" | "ERR_SERVICE_UNAVAILABLE" => actix_web::http::StatusCode::SERVICE_UNAVAILABLE,
         "ERR_INVALID_REQUEST" | "ERR_NO_DEVICES_SELECTED" => actix_web::http::StatusCode::BAD_REQUEST,
+        "ERR_RECORDING_ACTIVE" | "ERR_RECORDING_NOT_READY" => actix_web::http::StatusCode::CONFLICT,
         "ERR_BATCH_PARTIAL_FAILURE" => actix_web::http::StatusCode::MULTI_STATUS,
         _ => actix_web::http::StatusCode::INTERNAL_SERVER_ERROR,
     };
@@ -134,19 +135,6 @@ fn parse_tags(v: &serde_json::Value) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// Validate batch request size
-fn validate_batch_size(udids: &[String]) -> Result<(), HttpResponse> {
-    if udids.is_empty() {
-        return Err(error_response(ERR_NO_DEVICES_SELECTED, "At least one device must be selected"));
-    }
-    if udids.len() > MAX_BATCH_SIZE {
-        return Err(error_response(
-            "ERR_INVALID_REQUEST",
-            &format!("Maximum {} devices exceeded (max: {})", udids.len(), MAX_BATCH_SIZE)
-        ));
-    }
-    Ok(())
-}
 
 // ═════════════════════════════════════════════════════════════════════════════
 // Device Endpoints
@@ -744,6 +732,511 @@ pub async fn openapi_spec() -> HttpResponse {
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
+// Server Version
+// ═════════════════════════════════════════════════════════════════════════════
+
+/// GET /api/v1/version — server version info
+pub async fn get_version() -> HttpResponse {
+    HttpResponse::Ok().json(serde_json::json!({
+        "status": "success",
+        "data": {
+            "name": env!("CARGO_PKG_NAME"),
+            "version": env!("CARGO_PKG_VERSION"),
+            "server": "cloudcontrol-rust"
+        }
+    }))
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Product Catalog API
+// ═════════════════════════════════════════════════════════════════════════════
+
+/// GET /api/v1/products — list all products with optional ?brand=X&model=Y filters
+pub async fn list_products(
+    state: web::Data<AppState>,
+    query: web::Query<HashMap<String, String>>,
+) -> HttpResponse {
+    let brand_filter = query.get("brand").map(|s| s.as_str()).filter(|s| !s.is_empty());
+    let model_filter = query.get("model").map(|s| s.as_str()).filter(|s| !s.is_empty());
+
+    match state.db.list_products(brand_filter, model_filter).await {
+        Ok(products) => HttpResponse::Ok().json(json!({
+            "status": "success",
+            "data": products
+        })),
+        Err(e) => HttpResponse::InternalServerError().json(json!({
+            "status": "error",
+            "error": "ERR_DATABASE",
+            "message": format!("Failed to list products: {}", e)
+        })),
+    }
+}
+
+/// GET /api/v1/products/{id} — get single product by ID
+pub async fn get_product(
+    state: web::Data<AppState>,
+    path: web::Path<i64>,
+) -> HttpResponse {
+    let id = path.into_inner();
+    match state.db.get_product(id).await {
+        Ok(Some(product)) => HttpResponse::Ok().json(json!({
+            "status": "success",
+            "data": product
+        })),
+        Ok(None) => HttpResponse::NotFound().json(json!({
+            "status": "error",
+            "error": "ERR_PRODUCT_NOT_FOUND",
+            "message": format!("Product {} not found", id)
+        })),
+        Err(e) => HttpResponse::InternalServerError().json(json!({
+            "status": "error",
+            "error": "ERR_DATABASE",
+            "message": format!("Failed to get product: {}", e)
+        })),
+    }
+}
+
+/// POST /api/v1/products — create product from JSON body
+pub async fn create_product(
+    state: web::Data<AppState>,
+    body: web::Json<crate::models::product::CreateProductRequest>,
+) -> HttpResponse {
+    if body.brand.trim().is_empty() || body.model.trim().is_empty() {
+        return HttpResponse::BadRequest().json(json!({
+            "status": "error",
+            "error": "ERR_INVALID_REQUEST",
+            "message": "Brand and model are required"
+        }));
+    }
+
+    let brand = body.brand.trim();
+    let model = body.model.trim();
+
+    match state.db.create_product(
+        brand,
+        model,
+        body.name.as_deref(),
+        body.cpu.as_deref(),
+        body.gpu.as_deref(),
+        body.link.as_deref(),
+        body.coverage,
+    ).await {
+        Ok(product) => HttpResponse::Created().json(json!({
+            "status": "success",
+            "data": product
+        })),
+        Err(e) => HttpResponse::InternalServerError().json(json!({
+            "status": "error",
+            "error": "ERR_DATABASE",
+            "message": format!("Failed to create product: {}", e)
+        })),
+    }
+}
+
+/// PUT /api/v1/products/{id} — update product from JSON body
+pub async fn update_product(
+    state: web::Data<AppState>,
+    path: web::Path<i64>,
+    body: web::Json<crate::models::product::UpdateProductRequest>,
+) -> HttpResponse {
+    let id = path.into_inner();
+
+    // Validate brand/model are not empty if provided
+    if let Some(ref brand) = body.brand {
+        if brand.trim().is_empty() {
+            return HttpResponse::BadRequest().json(json!({
+                "status": "error",
+                "error": "ERR_INVALID_REQUEST",
+                "message": "Brand cannot be empty"
+            }));
+        }
+    }
+    if let Some(ref model) = body.model {
+        if model.trim().is_empty() {
+            return HttpResponse::BadRequest().json(json!({
+                "status": "error",
+                "error": "ERR_INVALID_REQUEST",
+                "message": "Model cannot be empty"
+            }));
+        }
+    }
+
+    match state.db.update_product(
+        id,
+        body.brand.as_deref(),
+        body.model.as_deref(),
+        body.name.as_deref(),
+        body.cpu.as_deref(),
+        body.gpu.as_deref(),
+        body.link.as_deref(),
+        body.coverage,
+    ).await {
+        Ok(Some(product)) => HttpResponse::Ok().json(json!({
+            "status": "success",
+            "data": product
+        })),
+        Ok(None) => HttpResponse::NotFound().json(json!({
+            "status": "error",
+            "error": "ERR_PRODUCT_NOT_FOUND",
+            "message": format!("Product {} not found", id)
+        })),
+        Err(e) => HttpResponse::InternalServerError().json(json!({
+            "status": "error",
+            "error": "ERR_DATABASE",
+            "message": format!("Failed to update product: {}", e)
+        })),
+    }
+}
+
+/// DELETE /api/v1/products/{id} — delete product by ID
+pub async fn delete_product(
+    state: web::Data<AppState>,
+    path: web::Path<i64>,
+) -> HttpResponse {
+    let id = path.into_inner();
+    match state.db.delete_product(id).await {
+        Ok(true) => HttpResponse::Ok().json(json!({
+            "status": "success",
+            "message": format!("Product {} deleted", id)
+        })),
+        Ok(false) => HttpResponse::NotFound().json(json!({
+            "status": "error",
+            "error": "ERR_PRODUCT_NOT_FOUND",
+            "message": format!("Product {} not found", id)
+        })),
+        Err(e) => HttpResponse::InternalServerError().json(json!({
+            "status": "error",
+            "error": "ERR_DATABASE",
+            "message": format!("Failed to delete product: {}", e)
+        })),
+    }
+}
+
+/// GET /products/{brand}/{model} — legacy endpoint for edit.html compatibility
+pub async fn list_products_by_brand_model(
+    state: web::Data<AppState>,
+    path: web::Path<(String, String)>,
+) -> HttpResponse {
+    let (brand, model) = path.into_inner();
+    match state.db.list_products_by_brand_model(&brand, &model).await {
+        Ok(products) => HttpResponse::Ok().json(products),
+        Err(e) => HttpResponse::InternalServerError().json(json!({
+            "status": "error",
+            "error": "ERR_DATABASE",
+            "message": format!("Failed to list products: {}", e)
+        })),
+    }
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Provider Registry API
+// ═════════════════════════════════════════════════════════════════════════════
+
+/// GET /api/v1/providers — list all providers with device counts
+pub async fn list_providers(state: web::Data<AppState>) -> HttpResponse {
+    match state.db.list_providers().await {
+        Ok(providers) => {
+            let mut providers_with_devices = Vec::new();
+            for provider in providers {
+                let devices = state
+                    .db
+                    .list_devices_by_provider(&provider.ip)
+                    .await
+                    .unwrap_or_default();
+                let device_count = devices.len() as i64;
+                providers_with_devices.push(
+                    crate::models::provider::ProviderWithDevices {
+                        provider,
+                        device_count,
+                        devices,
+                    },
+                );
+            }
+            HttpResponse::Ok().json(json!({
+                "status": "success",
+                "data": providers_with_devices
+            }))
+        }
+        Err(e) => {
+            tracing::warn!("Failed to list providers: {}", e);
+            HttpResponse::InternalServerError().json(json!({
+                "status": "error",
+                "error": "ERR_DATABASE",
+                "message": format!("Failed to list providers: {}", e)
+            }))
+        }
+    }
+}
+
+/// POST /api/v1/providers — register a new provider
+pub async fn create_provider(
+    state: web::Data<AppState>,
+    body: web::Json<crate::models::provider::CreateProviderRequest>,
+) -> HttpResponse {
+    let ip = body.ip.trim();
+    if ip.is_empty() {
+        return HttpResponse::BadRequest().json(json!({
+            "status": "error",
+            "error": "ERR_INVALID_REQUEST",
+            "message": "IP address is required"
+        }));
+    }
+
+    let notes = body.notes.as_deref().map(|n| n.trim());
+    match state
+        .db
+        .create_provider(ip, notes)
+        .await
+    {
+        Ok(provider) => HttpResponse::Created().json(json!({
+            "status": "success",
+            "data": provider
+        })),
+        Err(e) => {
+            let err_msg = e.to_string();
+            if err_msg.contains("UNIQUE constraint failed") {
+                HttpResponse::Conflict().json(json!({
+                    "status": "error",
+                    "error": "ERR_DUPLICATE_IP",
+                    "message": format!("Provider with IP '{}' already exists", ip)
+                }))
+            } else {
+                tracing::warn!("Failed to create provider: {}", e);
+                HttpResponse::InternalServerError().json(json!({
+                    "status": "error",
+                    "error": "ERR_DATABASE",
+                    "message": format!("Failed to create provider: {}", e)
+                }))
+            }
+        }
+    }
+}
+
+/// GET /api/v1/providers/{id} — get a single provider
+pub async fn get_provider(
+    state: web::Data<AppState>,
+    path: web::Path<i64>,
+) -> HttpResponse {
+    let id = path.into_inner();
+    match state.db.get_provider(id).await {
+        Ok(Some(provider)) => {
+            let devices = state
+                .db
+                .list_devices_by_provider(&provider.ip)
+                .await
+                .unwrap_or_default();
+            let device_count = devices.len() as i64;
+            HttpResponse::Ok().json(json!({
+                "status": "success",
+                "data": crate::models::provider::ProviderWithDevices {
+                    provider,
+                    device_count,
+                    devices,
+                }
+            }))
+        }
+        Ok(None) => HttpResponse::NotFound().json(json!({
+            "status": "error",
+            "error": "ERR_PROVIDER_NOT_FOUND",
+            "message": "Provider not found"
+        })),
+        Err(e) => {
+            tracing::warn!("Failed to get provider {}: {}", id, e);
+            HttpResponse::InternalServerError().json(json!({
+                "status": "error",
+                "error": "ERR_DATABASE",
+                "message": format!("Failed to get provider: {}", e)
+            }))
+        }
+    }
+}
+
+/// PUT /api/v1/providers/{id} — update provider notes
+pub async fn update_provider(
+    state: web::Data<AppState>,
+    path: web::Path<i64>,
+    body: String,
+) -> HttpResponse {
+    let id = path.into_inner();
+
+    // Parse JSON body manually — jQuery $.ajax sends without Content-Type header
+    let body: serde_json::Value = match serde_json::from_str(&body) {
+        Ok(v) => v,
+        Err(_) => {
+            return HttpResponse::BadRequest().json(json!({
+                "status": "error",
+                "error": "ERR_INVALID_REQUEST",
+                "message": "Invalid JSON body"
+            }));
+        }
+    };
+
+    let notes = body
+        .get("notes")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim();
+
+    match state.db.update_provider_notes(id, notes).await {
+        Ok(Some(provider)) => {
+            let devices = state
+                .db
+                .list_devices_by_provider(&provider.ip)
+                .await
+                .unwrap_or_default();
+            let device_count = devices.len() as i64;
+            HttpResponse::Ok().json(json!({
+                "status": "success",
+                "data": crate::models::provider::ProviderWithDevices {
+                    provider,
+                    device_count,
+                    devices,
+                }
+            }))
+        }
+        Ok(None) => HttpResponse::NotFound().json(json!({
+            "status": "error",
+            "error": "ERR_PROVIDER_NOT_FOUND",
+            "message": "Provider not found"
+        })),
+        Err(e) => {
+            tracing::warn!("Failed to update provider {}: {}", id, e);
+            HttpResponse::InternalServerError().json(json!({
+                "status": "error",
+                "error": "ERR_DATABASE",
+                "message": format!("Failed to update provider: {}", e)
+            }))
+        }
+    }
+}
+
+/// POST /api/v1/providers/{id}/heartbeat — provider heartbeat keep-alive
+pub async fn provider_heartbeat(
+    state: web::Data<AppState>,
+    path: web::Path<i64>,
+) -> HttpResponse {
+    let id = path.into_inner();
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs_f64();
+
+    let heartbeats = state.provider_heartbeats.clone();
+    let timeout = now + 60.0;
+
+    if heartbeats.get(&id).is_some() {
+        // Existing session — just reset timer, no DB write needed
+        heartbeats.insert(id, timeout);
+
+        // Fetch current provider data without updating presence_changed_at
+        match state.db.get_provider(id).await {
+            Ok(Some(provider)) => {
+                let devices = state
+                    .db
+                    .list_devices_by_provider(&provider.ip)
+                    .await
+                    .unwrap_or_default();
+                let device_count = devices.len() as i64;
+
+                HttpResponse::Ok().json(json!({
+                    "status": "success",
+                    "data": crate::models::provider::ProviderWithDevices {
+                        provider,
+                        device_count,
+                        devices,
+                    }
+                }))
+            }
+            Ok(None) => {
+                heartbeats.remove(&id);
+                HttpResponse::NotFound().json(json!({
+                    "status": "error",
+                    "error": "ERR_PROVIDER_NOT_FOUND",
+                    "message": "Provider not found"
+                }))
+            }
+            Err(e) => {
+                tracing::warn!("Failed to fetch provider {}: {}", id, e);
+                HttpResponse::InternalServerError().json(json!({
+                    "status": "error",
+                    "error": "ERR_DATABASE",
+                    "message": format!("Failed to process heartbeat: {}", e)
+                }))
+            }
+        }
+    } else {
+        // New session — update presence to online and spawn timeout checker
+        match state.db.update_provider_presence(id, true).await {
+            Ok(Some(provider)) => {
+                heartbeats.insert(id, timeout);
+
+                let db = state.db.clone();
+                let hb = heartbeats.clone();
+                let provider_id = id;
+                tokio::spawn(async move {
+                    loop {
+                        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                        let now = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs_f64();
+
+                        let expired = hb
+                            .get(&provider_id)
+                            .map(|t| *t < now)
+                            .unwrap_or(true);
+
+                        if expired {
+                            hb.remove(&provider_id);
+                            if let Err(e) =
+                                db.update_provider_presence(provider_id, false).await
+                            {
+                                tracing::warn!(
+                                    "Failed to mark provider {} offline: {}",
+                                    provider_id,
+                                    e
+                                );
+                            }
+                            return;
+                        }
+                    }
+                });
+
+                let devices = state
+                    .db
+                    .list_devices_by_provider(&provider.ip)
+                    .await
+                    .unwrap_or_default();
+                let device_count = devices.len() as i64;
+
+                HttpResponse::Ok().json(json!({
+                    "status": "success",
+                    "data": crate::models::provider::ProviderWithDevices {
+                        provider,
+                        device_count,
+                        devices,
+                    }
+                }))
+            }
+            Ok(None) => HttpResponse::NotFound().json(json!({
+                "status": "error",
+                "error": "ERR_PROVIDER_NOT_FOUND",
+                "message": "Provider not found"
+            })),
+            Err(e) => {
+                tracing::warn!("Failed to process provider heartbeat {}: {}", id, e);
+                HttpResponse::InternalServerError().json(json!({
+                    "status": "error",
+                    "error": "ERR_DATABASE",
+                    "message": format!("Failed to process heartbeat: {}", e)
+                }))
+            }
+        }
+    }
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
 // WebSocket Screenshot Streaming API
 // ═════════════════════════════════════════════════════════════════════════════
 
@@ -788,6 +1281,255 @@ impl Default for StreamSettings {
             scale: 0.5,
             interval_ms: 50,
         }
+    }
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Hierarchy, Upload, Rotation (Story 10-4)
+// ═════════════════════════════════════════════════════════════════════════════
+
+/// GET /api/v1/devices/{udid}/hierarchy - Get UI hierarchy tree
+pub async fn hierarchy(
+    state: web::Data<AppState>,
+    path: web::Path<String>,
+) -> HttpResponse {
+    let udid = path.into_inner();
+
+    let (device, client) = match get_device_client(&state, &udid).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+
+    // Mock device handling
+    if device.get("is_mock").and_then(|v| v.as_bool()).unwrap_or(false) {
+        return success_response(json!({
+            "id": "mock-root",
+            "className": "android.widget.FrameLayout",
+            "text": "",
+            "resourceId": "",
+            "description": "",
+            "rect": {"x": 0, "y": 0, "width": 1080, "height": 2400},
+            "clickable": false,
+            "enabled": true,
+            "children": [
+                {
+                    "id": "mock-button",
+                    "className": "android.widget.Button",
+                    "text": "Mock Button",
+                    "resourceId": "com.app:id/button",
+                    "description": "",
+                    "rect": {"x": 100, "y": 200, "width": 200, "height": 50},
+                    "clickable": true,
+                    "enabled": true,
+                    "children": []
+                }
+            ]
+        }));
+    }
+
+    match DeviceService::dump_hierarchy(&client).await {
+        Ok(h) => success_response(h),
+        Err(e) => error_response("ERR_OPERATION_FAILED", &format!("Hierarchy dump failed: {}", e)),
+    }
+}
+
+/// POST /api/v1/devices/{udid}/upload - Upload file to device
+pub async fn upload(
+    state: web::Data<AppState>,
+    path: web::Path<String>,
+    mut payload: actix_multipart::Multipart,
+) -> HttpResponse {
+    let udid = path.into_inner();
+
+    let (_device, client) = match get_device_client(&state, &udid).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+
+    const MAX_UPLOAD_SIZE: usize = 100 * 1024 * 1024; // 100 MB
+
+    while let Some(Ok(mut field)) = payload.next().await {
+        let raw_filename = field
+            .content_disposition()
+            .and_then(|cd| cd.get_filename().map(|s| s.to_string()))
+            .unwrap_or_else(|| "unknown".to_string());
+
+        // Sanitize: strip path components to prevent directory traversal
+        let filename = std::path::Path::new(&raw_filename)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("unknown")
+            .to_string();
+
+        // Read file data with size limit
+        let mut data = Vec::new();
+        while let Some(Ok(chunk)) = field.next().await {
+            data.extend_from_slice(&chunk);
+            if data.len() > MAX_UPLOAD_SIZE {
+                return error_response(
+                    "ERR_INVALID_REQUEST",
+                    &format!("File too large (max {} MB)", MAX_UPLOAD_SIZE / 1024 / 1024),
+                );
+            }
+        }
+
+        // Determine device path by extension
+        let ext = filename
+            .rsplit('.')
+            .next()
+            .unwrap_or("")
+            .to_lowercase();
+        let device_path = match ext.as_str() {
+            "jpg" | "jpeg" | "png" | "gif" | "webp" => format!("/sdcard/DCIM/{}", filename),
+            "mp4" | "avi" | "mov" | "mkv" => format!("/sdcard/Movies/{}", filename),
+            _ => format!("/sdcard/Download/{}", filename),
+        };
+
+        // Push to device
+        if let Err(e) = client.push_file(&device_path, data, &filename).await {
+            return error_response("ERR_OPERATION_FAILED", &format!("Upload failed: {}", e));
+        }
+
+        // If image, trigger media scan
+        if matches!(ext.as_str(), "jpg" | "jpeg" | "png" | "gif" | "webp") {
+            let _ = client
+                .shell_cmd(&format!(
+                    "am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE -d file://{}",
+                    device_path
+                ))
+                .await;
+        }
+
+        return success_response(json!({
+            "message": format!("File uploaded to: {}", device_path),
+            "path": device_path,
+        }));
+    }
+
+    error_response("ERR_INVALID_REQUEST", "No file uploaded")
+}
+
+/// POST /api/v1/devices/{udid}/rotation - Fix device rotation via ATX agent
+pub async fn rotation(
+    state: web::Data<AppState>,
+    path: web::Path<String>,
+) -> HttpResponse {
+    let udid = path.into_inner();
+
+    let (_device, client) = match get_device_client(&state, &udid).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+
+    let url = format!("{}/info/rotation", client.base_url());
+    match client.http_client().post(&url).send().await {
+        Ok(resp) => {
+            let body = resp.text().await.unwrap_or_default();
+            let data: serde_json::Value = serde_json::from_str(&body).unwrap_or(json!({"raw": body}));
+            success_response(data)
+        }
+        Err(e) => {
+            tracing::warn!("[ROTATION] v1 failed for {}: {}", udid, e);
+            error_response("ERR_OPERATION_FAILED", &format!("Rotation fix failed: {}", e))
+        }
+    }
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Video Recording Management (Story 11-1)
+// ═════════════════════════════════════════════════════════════════════════════
+
+/// GET /api/v1/videos - List all video recordings (with optional ?udid= and ?status= filters)
+pub async fn list_videos(
+    state: web::Data<AppState>,
+    req: HttpRequest,
+) -> HttpResponse {
+    let query = web::Query::<std::collections::HashMap<String, String>>::from_query(
+        req.query_string(),
+    )
+    .unwrap_or_else(|_| web::Query(std::collections::HashMap::new()));
+    let udid = query.get("udid").map(|s| s.as_str());
+    let status = query.get("status").map(|s| s.as_str());
+    let recordings = state.video_service.list_recordings(udid, status).await;
+    success_response(json!(recordings))
+}
+
+/// GET /api/v1/videos/{id} - Get video recording metadata
+pub async fn get_video(
+    state: web::Data<AppState>,
+    path: web::Path<String>,
+) -> HttpResponse {
+    let id = path.into_inner();
+    match state.video_service.get_recording(&id).await {
+        Some(info) => success_response(json!(info)),
+        None => error_response("ERR_RECORDING_NOT_FOUND", "Video recording not found"),
+    }
+}
+
+/// GET /api/v1/videos/{id}/download - Download video file
+pub async fn download_video(
+    state: web::Data<AppState>,
+    path: web::Path<String>,
+    req: actix_web::HttpRequest,
+) -> HttpResponse {
+    let id = path.into_inner();
+    match state.video_service.get_recording(&id).await {
+        Some(info) => {
+            if info.status != "completed" && info.status != "recovered" {
+                return error_response(
+                    "ERR_RECORDING_NOT_READY",
+                    &format!("Recording is not ready for download (status: {})", info.status),
+                );
+            }
+            let file_path = std::path::PathBuf::from(&info.file_path);
+            match actix_files::NamedFile::open(&file_path) {
+                Ok(file) => {
+                    let filename = file_path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("recording.mp4")
+                        .to_string();
+                    file.set_content_disposition(actix_web::http::header::ContentDisposition {
+                        disposition: actix_web::http::header::DispositionType::Attachment,
+                        parameters: vec![actix_web::http::header::DispositionParam::Filename(filename)],
+                    })
+                    .into_response(&req)
+                }
+                Err(_) => error_response("ERR_FILE_NOT_FOUND", "Recording file not found on disk"),
+            }
+        }
+        None => error_response("ERR_RECORDING_NOT_FOUND", "Video recording not found"),
+    }
+}
+
+/// DELETE /api/v1/videos/{id} - Delete video recording
+pub async fn delete_video(
+    state: web::Data<AppState>,
+    path: web::Path<String>,
+) -> HttpResponse {
+    let id = path.into_inner();
+    match state.video_service.delete_recording(&id).await {
+        Ok(()) => success_response(json!({"message": "Recording deleted"})),
+        Err(e) => {
+            let status = if e == "ERR_RECORDING_NOT_FOUND" { 404 } else { 409 };
+            if status == 404 {
+                error_response("ERR_RECORDING_NOT_FOUND", "Video recording not found")
+            } else {
+                error_response("ERR_RECORDING_ACTIVE", "Cannot delete an active recording")
+            }
+        }
+    }
+}
+
+/// POST /api/v1/videos/{id}/stop - Force-stop an in-progress recording
+pub async fn stop_video(
+    state: web::Data<AppState>,
+    path: web::Path<String>,
+) -> HttpResponse {
+    let id = path.into_inner();
+    match state.video_service.stop_recording(&id).await {
+        Ok(info) => success_response(json!(info)),
+        Err(e) => error_response("ERR_RECORDING_NOT_FOUND", &format!("Stop failed: {}", e)),
     }
 }
 

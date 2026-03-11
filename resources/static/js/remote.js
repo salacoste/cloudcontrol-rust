@@ -21,18 +21,14 @@ $(function () {
     });
   } catch(e) { console.warn('Clipboard init skipped:', e.message); }
 })
-window.LOCAL_URL = '/'; // http://localhost:17310/';
-window.LOCAL_VERSION = '0.0.3';
+// Server-relative URLs used throughout — no hardcoded IPs or versions
 
 window.app = new Vue({
   el: '#app',
   delimiters: ['[[', ']]'],
   data: {
     deviceUdid: deviceUdid,
-    device: {
-      ip: deviceIp,
-      port: 7912,
-    },
+    device: {},
     deviceInfo: {},
     activeTab: 'home',
     fixConsole: '', // log for fix minicap and rotation
@@ -92,8 +88,9 @@ window.app = new Vue({
       }]
     },
     imageBlobBuffer: [],
-    videoUrl: '',
-    videoReceiver: null, // sub function to receive image
+    videoReceiver: null,
+    videoRecordings: [],
+    showVideoPanel: false,
     inputText: '',
     uploadStatus: '',
     inputWS: null,
@@ -164,9 +161,7 @@ window.app = new Vue({
       }
       return xpath;
     },
-    deviceUrl: function () {
-      return "http://" + this.device.ip + ":" + this.device.port;
-    },
+    // deviceUrl removed — all calls proxied through server via /inspector/{udid}/...
     batteryLevel: function () {
       return this.deviceInfo.battery ? this.deviceInfo.battery.level : 0;
     },
@@ -208,12 +203,12 @@ window.app = new Vue({
       self.resizeScreen();
     });
 
+    // Check server version
+    this.checkVersion();
     // Initialize jstree
     this.initJstree();
     // For reference
     this.activeMouseControl();
-    // Check version
-    // this.checkVersion();
     this.initDragDealer();
 
     (function (that,_device) {
@@ -221,6 +216,9 @@ window.app = new Vue({
       document.title = _device.model;
       try { $('#json-renderer').jsonViewer(device, {}); } catch(e) {}
     })(this,device);
+
+    // Load video recordings for this device
+    this.loadVideoRecordings();
 
     // Three-level fallback: scrcpy (hardware encoding, low latency) -> NIO (WebSocket screenshots) -> HTTP (polling)
     var httpModeInitialized = false;
@@ -801,58 +799,26 @@ window.app = new Vue({
     },
 
     loadWhatsinput(callback) {
-      let defer = $.Deferred()
-      let ws = new WebSocket("ws://" + this.device.ip + ":6677" + "/whatsinput");
-      this.websockets.winput = ws;
-      ws.onopen = (ev) => {
-        defer.resolve()
-        console.log("whatsinput connected")
-      }
-      ws.onmessage = (ev) => {
-        console.log("winput recv", ev)
-        let data = JSON.parse(ev.data)
-        switch (data.type) {
-          case "InputStart":
-            this.whatsinput.text = data.text;
-            this.whatsinput.disabled = false;
-            setTimeout(() => {
-              this.$refs.whatsinput.focus()
-            }, 1)
-            break;
-          case "InputFinish":
-            this.whatsinput.disabled = true;
-            break
-          case "InputChange":
-            this.whatsinput.text = data.text;
-            break;
-        }
-      }
-      ws.onerror = (ev) => {
-        console.error(ev)
-        defer.reject()
-      }
-      ws.onclose = (ev) => {
-        console.log("winput closed")
-        if (ws === this.websockets.winput) {
-          this.websockets.winput = null;
-          this.whatsinput.disabled = true;
-          this.whatsinput.text = null;
-        }
-      }
+      // Whatsinput requires direct device access on port 6677 — not available in proxied mode
+      console.log("[whatsinput] Skipped — direct device access not available in server-proxied mode");
+      let defer = $.Deferred();
+      defer.reject();
       return defer;
     },
     sendInputText() {
-        console.log("sync", this.whatsinput.text);
         let ws = this.websockets.winput;
+        if (!ws) { console.warn("[whatsinput] Not connected — input sync disabled"); return; }
+        console.log("sync", this.whatsinput.text);
         ws.send(JSON.stringify({
           type: "InputEdit",
           text: this.whatsinput.text,
         }))
     },
     sendInputKey(key) {
+      let ws = this.websockets.winput;
+      if (!ws) { console.warn("[whatsinput] Not connected — key sync disabled"); return; }
       console.log("Sync key", key)
       let code = { "enter": 66, "tab": 61 }[key] || key;
-      let ws = this.websockets.winput;
       ws.send(JSON.stringify({
         type: "InputKey",
         code: "" + code,
@@ -861,7 +827,7 @@ window.app = new Vue({
     runShell(command) {
       return $.ajax({
         method: "get",
-        url: this.deviceUrl + "/shell",
+        url: "/inspector/" + this.deviceUdid + "/shell",
         data: {
           "command": command,
         },
@@ -886,7 +852,7 @@ window.app = new Vue({
           self.showAjaxError(ret);
         })
         .then(function () {
-          return $.getJSON(LOCAL_URL + 'inspector/' + deviceUdid + '/hierarchy')
+          return $.getJSON('/inspector/' + deviceUdid + '/hierarchy')
         })
         .fail(function (ret) {
           self.showAjaxError(ret);
@@ -1049,7 +1015,7 @@ window.app = new Vue({
       }).length - 1;
     },
     screenRefresh: function () {
-      return $.getJSON(LOCAL_URL + 'inspector/' + deviceUdid + '/screenshot')
+      return $.getJSON('/inspector/' + deviceUdid + '/screenshot')
         .then(function (ret) {
           var blob = b64toBlob(ret.data, 'image/' + ret.type);
           this._drawBlobImageToScreen(blob);
@@ -1172,37 +1138,11 @@ window.app = new Vue({
     },
     checkVersion: function () {
       var self = this;
-      $.ajax({
-        url: LOCAL_URL + "api/v1/version",
-        type: "GET",
-        //contentType: "application/json; charset=utf-8"
-      })
-        .done(function (ret) {
-          console.log("version", ret.name);
-          if (ret.name !== LOCAL_VERSION) {
-            self.showError("Expect local server version: " + LOCAL_VERSION + " but got " + ret.name + ", Maybe you need upgrade 'weditor'");
-            return
-          }
-          var lastScreenshotBase64 = localStorage.screenshotBase64;
-          if (lastScreenshotBase64) {
-            var blob = b64toBlob(lastScreenshotBase64, 'image/jpeg');
-            self._drawBlobImageToScreen(blob);
-            self.canvasStyleTree.opacity = 1.0;
-          }
-          if (localStorage.windowHierarchy) {
-            // self.originNodes = JSON.parse(localStorage.windowHierarchy);
-            var source = JSON.parse(localStorage.windowHierarchy);
-            self.drawAllNodeFromSource(source);
-            self.loading = false;
-            self.canvasStyleTree.opacity = 1.0;
-          }
-        })
-        .fail(function (ret) {
-          self.showError("<p>Local server not started, start with</p><pre>$ python -m weditor</pre>");
-        })
-        .always(function () {
-          self.loading = false;
-        })
+      $.get("/api/v1/version", function (ret) {
+        console.log("Server version:", ret.data.name, ret.data.version, "(" + ret.data.server + ")");
+      }).fail(function () {
+        self.showError("<p>Server not reachable</p>");
+      });
     },
     activeMouseControl: function () {
       var self = this;
@@ -1462,86 +1402,6 @@ window.app = new Vue({
       }
       return dtd.promise();
     },
-    connectImage2VideoWebSocket: function (fps) {
-      var protocol = location.protocol == "http:" ? "ws:" : "wss:";
-      var wsURL = protocol + location.host + "/video/convert"
-      var wsQueries = encodeURI("fps=" + fps) + "&" + encodeURI("udid=" + this.deviceUdid) + "&" + encodeURI("name=" + this.deviceInfo.model)
-      var ws = new WebSocket(wsURL + "?" + wsQueries)
-      var def = $.Deferred()
-      ws.onopen = function () {
-        def.resolve(this)
-      }
-      ws.onclose = function (ev) {
-        def.reject("Somehow ws disconnected")
-      }
-      return def.promise();
-    },
-    startLowQualityScreenRecord: function (event) {
-      $(event.target).notify("Initializing ...");
-      this.connectImage2VideoWebSocket(2)
-        .done(function (ws) {
-          $(event.target).notify("Video recording, click again to stop");
-          var key = setInterval(function () {
-            $.ajax({
-              url: this.deviceUrl + "/screenshot/0?thumbnail=800x800",
-              method: "get",
-              processData: false,
-              cache: false,
-              xhr: function () {
-                var xhr = new XMLHttpRequest();
-                xhr.responseType = "blob"
-                return xhr;
-              },
-              success: function (data) {
-                ws.send(data)
-                console.log("screenshot")
-              }
-            })
-          }.bind(this), 1000)
-          this.videoReceiver = {
-            ws: ws,
-            key: key,
-          }
-        }.bind(this))
-        .fail(function (err) {
-          $(event.target).notify("Recording failed to start, please click About Us to contact the administrator", "error");
-        })
-    },
-    startVideoRecord: function (event) {
-      $(event.target).notify("Initializing ...");
-      this.connectImage2VideoWebSocket(10)
-        .done(function (ws) {
-          $(event.target).notify("Video recording, click again to stop");
-          var cache = {}
-          function receiver(_, data) {
-            cache.last = data;
-          }
-          var key = setInterval(function () {
-            var lastData = cache.last;
-            cache.last = null;
-            if (lastData) {
-              ws.send(lastData)
-            }
-          }, 1000 / 6) // fps: 6
-          receiver.ws = ws;
-          receiver.key = key;
-
-          $.subscribe('imagedata', receiver)
-          this.videoReceiver = receiver;
-        }.bind(this))
-        .fail(function (err) {
-          $(event.target).notify("Recording failed to start, please click About Us to contact the administrator", "error");
-        })
-    },
-    stopVideoRecord: function () {
-      if (this.videoReceiver) {
-        $.unsubscribe("imagedata", this.videoReceiver);
-        this.videoReceiver.ws.close()
-        clearInterval(this.videoReceiver.key);
-        this.videoReceiver = null;
-        this.$notify({ title: 'Video', message: 'Video recording successful', type: 'success' });
-      }
-    },
     toggleScreen: function () {
       if (this.screenWS) {
         this.screenWS.close();
@@ -1552,29 +1412,117 @@ window.app = new Vue({
         this.canvasStyle.opacity = 1;
       }
     },
-    saveShortVideo: function (event) {
-      var fd = new FormData();
-      this.imageBlobBuffer.forEach(function (blob) {
-        fd.append('file', blob);
+    connectImage2VideoWebSocket: function (fps) {
+      var self = this;
+      var protocol = location.protocol == "http:" ? "ws:" : "wss:";
+      var wsURL = protocol + "//" + location.host + "/video/convert";
+      var wsQueries = "fps=" + fps + "&udid=" + encodeURIComponent(this.deviceUdid) + "&name=" + encodeURIComponent(this.deviceInfo.model || '');
+      var ws = new WebSocket(wsURL + "?" + wsQueries);
+      var def = $.Deferred();
+      ws.onopen = function () {
+        def.resolve(ws);
+      };
+      ws.onmessage = function (evt) {
+        try {
+          var msg = JSON.parse(evt.data);
+          if (msg.type === 'recording_stopped' && msg.id) {
+            $.notify("Recording saved", "success");
+            self.loadVideoRecordings();
+          }
+        } catch (e) { /* ignore non-JSON messages */ }
+      };
+      ws.onclose = function () {
+        def.reject("WebSocket disconnected");
+        self.loadVideoRecordings();
+      };
+      ws.onerror = function () {
+        def.reject("WebSocket error");
+      };
+      return def.promise();
+    },
+    startScreenRecord: function () {
+      var self = this;
+      this.connectImage2VideoWebSocket(2)
+        .done(function (ws) {
+          var key = setInterval(function () {
+            $.ajax({
+              url: self.deviceUrl + "/screenshot/0?thumbnail=800x800",
+              method: "get",
+              processData: false,
+              cache: false,
+              xhr: function () {
+                var xhr = new XMLHttpRequest();
+                xhr.responseType = "blob";
+                return xhr;
+              },
+              success: function (data) {
+                if (ws.readyState === WebSocket.OPEN) {
+                  ws.send(data);
+                }
+              }
+            });
+          }, 500); // ~2 FPS
+          self.videoReceiver = { ws: ws, key: key };
+        })
+        .fail(function (err) {
+          console.error("Video recording failed:", err);
+        });
+    },
+    stopScreenRecord: function () {
+      if (this.videoReceiver) {
+        clearInterval(this.videoReceiver.key);
+        if (this.videoReceiver.ws && this.videoReceiver.ws.readyState === WebSocket.OPEN) {
+          this.videoReceiver.ws.close();
+        }
+        this.videoReceiver = null;
+      }
+    },
+    toggleVideoRecord: function () {
+      if (this.videoReceiver) {
+        this.stopScreenRecord();
+      } else {
+        this.startScreenRecord();
+      }
+    },
+    loadVideoRecordings: function () {
+      var self = this;
+      $.getJSON('/api/v1/videos?udid=' + encodeURIComponent(this.deviceUdid), function (resp) {
+        if (resp.status === 'success' && resp.data) {
+          self.videoRecordings = resp.data;
+        }
       });
-      $(event.target).notify("Video compositing in background, please wait ...");
-      console.log("upload")
+    },
+    deleteVideo: function (id) {
+      if (!confirm('Delete this video recording?')) return;
+      var self = this;
       $.ajax({
-        type: "post",
-        url: "http://10.246.46.160:7000/img2video", // TODO: temporary address, needs to be replaced later
-        processData: false,
-        contentType: false,
-        data: fd,
-        dateType: 'json',
-      }).done(function (data) {
-        console.log(data.url);
-        this.videoUrl = data.url;
-        this.$notify({ title: 'Video', message: 'Compositing complete', type: 'success' });
-      }.bind(this))
+        url: '/api/v1/videos/' + id,
+        method: 'DELETE',
+        success: function () {
+          $.notify("Video deleted", "success");
+          self.loadVideoRecordings();
+        },
+        error: function () {
+          $.notify("Failed to delete video", "error");
+        }
+      });
+    },
+    formatDuration: function (ms) {
+      if (!ms) return '—';
+      var seconds = Math.floor(ms / 1000);
+      var minutes = Math.floor(seconds / 60);
+      seconds = seconds % 60;
+      return minutes + ':' + (seconds < 10 ? '0' : '') + seconds;
+    },
+    formatFileSize: function (bytes) {
+      if (!bytes) return '—';
+      if (bytes < 1024) return bytes + ' B';
+      if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
+      return (bytes / 1048576).toFixed(1) + ' MB';
     },
     saveScreenshot: function () {
       $.ajax({
-        url: this.deviceUrl + "/screenshot",
+        url: "/inspector/" + this.deviceUdid + "/screenshot/img",
         cache: false,
         xhrFields: {
           responseType: 'blob'
@@ -1594,7 +1542,7 @@ window.app = new Vue({
       $(event.target).notify("Uploading ...");
       $.ajax({
         method: "post",
-        url: this.deviceUrl + "/upload/sdcard/tmp/",
+        url: "/inspector/" + this.deviceUdid + "/upload",
         data: formData,
         processData: false,
         contentType: false,
@@ -1614,33 +1562,11 @@ window.app = new Vue({
     },
     fixRotation: function () {
       $.ajax({
-        url: this.deviceUrl + "/info/rotation",
+        url: "/inspector/" + this.deviceUdid + "/rotation",
         method: "post",
       }).then(function (ret) {
         console.log("rotation fixed")
       })
-    },
-    fixMinicap: function () {
-      this.fixConsole = "remove old minicap";
-      $.ajax({
-        method: "post",
-        url: this.deviceUrl + "/shell",
-        data: {
-          command: "rm -f /data/local/tmp/minicap /data/local/tmp/minicap.so"
-        }
-      })
-        .then(function () {
-          this.fixConsole = "download mincap to device ..."
-          return $.ajax({
-            url: this.deviceUrl + "/minicap",
-            method: "put",
-          })
-        }.bind(this))
-        .then(function () {
-          this.fixConsole = "minicap fixed"
-        }.bind(this), function () {
-          this.fixConsole = "minicap can not be fixed, open Browser Console for more detail"
-        }.bind(this))
     },
     tabScroll: function (ev) {
       // var el = ev.target;
@@ -1701,7 +1627,7 @@ window.app = new Vue({
     },
     shell: function (command) {
       return $.ajax({
-        url: this.deviceUrl + "/shell",
+        url: "/inspector/" + this.deviceUdid + "/shell",
         method: "post",
         data: {
           command: command,
@@ -1723,7 +1649,7 @@ window.app = new Vue({
       if (ret.responseJSON && ret.responseJSON.description) {
         this.showError(ret.responseJSON.description);
       } else {
-        this.showError("<p>Local server not started, start with</p><pre>$ python -m weditor</pre>");
+        this.showError("<p>Server not reachable</p>");
       }
     },
     // Left screen drag

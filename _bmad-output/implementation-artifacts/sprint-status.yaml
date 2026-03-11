@@ -1,294 +1,220 @@
 # Sprint Status - cloudcontrol-rust
-# Generated: 2026-03-05
-# Source: Implementation Readiness Assessment (100% READY)
+# Generated: 2026-03-11
+# Project: cloudcontrol-rust
+# Tracking System: file-system
+# Story Location: _bmad-output/implementation-artifacts
 
+# STATUS DEFINITIONS:
+# ==================
+# Epic Status:
+#   - backlog: Epic not yet started
+#   - in-progress: Epic actively being worked on
+#   - done: All stories in epic completed
+#
+# Epic Status Transitions:
+#   - backlog → in-progress: Automatically when first story is created (via create-story)
+#   - in-progress → done: Manually when all stories reach 'done' status
+#
+# Story Status:
+#   - backlog: Story only exists in epic file
+#   - ready-for-dev: Story file created in stories folder
+#   - in-progress: Developer actively working on implementation
+#   - review: Implementation complete, ready for review
+#   - done: Story completed
+#
+# Retrospective Status:
+#   - optional: Can be completed but not required
+#   - done: Retrospective has been completed
+#
+# WORKFLOW NOTES:
+# ===============
+# - Epic transitions to 'in-progress' automatically when first story is created
+# - Stories can be worked in parallel if team capacity allows
+# - SM typically creates next story after previous one is 'done' to incorporate learnings
+# - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
+
+generated: 2026-03-10
 project: cloudcontrol-rust
-generated_date: 2026-03-05
-last_updated: 2026-03-10
+project_key: NOKEY
+tracking_system: file-system
+story_location: "_bmad-output/implementation-artifacts"
 
-# Status Definitions:
-# Epic: backlog → in-progress → done
-# Story: backlog → ready-for-dev → in-progress → review → done
+development_status:
+  # ============================================================
+  # PHASE 1: MVP & Core Features (Complete)
+  # ============================================================
 
-# Priority Definitions:
-# - P0: Critical/Blocking
-# - P1: High
-# - P2: Medium
-# - P3: Low
+  # Epic 1A: Device Connection & Discovery
+  epic-1a: done
+  1a-1-wifi-device-auto-discovery: done
+  1a-2-usb-device-discovery-with-adb-forwarding: done
+  1a-3-atx-agent-protocol-connection: done
+  1a-4-manual-wifi-device-addition: done
+  1a-5-connection-health-monitoring: done
+  1a-6-automatic-reconnection: done
+  epic-1a-retrospective: done
 
-epics:
-  epic-1a:
-    title: "Device Connection & Discovery"
-    status: done
-    priority: P0
-    phase: MVP
-    frs_covered: [FR1, FR2, FR3, FR4, FR5, FR6]
-    stories:
-      - id: 1a-1-wifi-device-auto-discovery
-        title: "WiFi Device Auto-Discovery"
-        status: done
-        priority: P0
-      - id: 1a-2-usb-device-discovery-with-adb-forwarding
-        title: "USB Device Discovery with ADB Forwarding"
-        status: done
-        priority: P0
-      - id: 1a-3-atx-agent-protocol-connection
-        title: "ATX Agent Protocol Connection"
-        status: done
-        priority: P0
-      - id: 1a-4-manual-wifi-device-addition
-        title: "Manual WiFi Device Addition"
-        status: done
-        priority: P1
-      - id: 1a-5-connection-health-monitoring
-        title: "Connection Health Monitoring"
-        status: done
-        priority: P1
-      - id: 1a-6-automatic-reconnection
-        title: "Automatic Reconnection"
-        status: done
-        priority: P1
+  # Epic 1B: Device Dashboard & Management
+  epic-1b: done
+  1b-1-device-grid-dashboard: done
+  1b-2-device-metadata-panel: done
+  1b-3-device-state-persistence: done
+  1b-4-device-tagging-system: done
+  1b-5-connection-history-uptime: done
+  1b-6-manual-device-disconnect: done
+  epic-1b-retrospective: done
 
-  epic-1b:
-    title: "Device Dashboard & Management"
-    status: done
-    priority: P0
-    phase: MVP
-    frs_covered: [FR7, FR8, FR9, FR10, FR11, FR12]
-    depends_on: [epic-1a]
-    stories:
-      - id: 1b-1-device-grid-dashboard
-        title: "Device Grid Dashboard"
-        status: done
-        priority: P0
-      - id: 1b-2-device-metadata-panel
-        title: "Device Metadata Panel"
-        status: done
-        priority: P0
-      - id: 1b-3-device-state-persistence
-        title: "Device State Persistence"
-        status: done
-        priority: P0
-      - id: 1b-4-device-tagging-system
-        title: "Device Tagging System"
-        status: done
-        priority: P2
-      - id: 1b-5-connection-history-uptime
-        title: "Connection History & Uptime"
-        status: done
-        priority: P2
-      - id: 1b-6-manual-device-disconnect
-        title: "Manual Device Disconnect"
-        status: done
-        priority: P1
+  # Epic 2: Real-Time Visual Monitoring
+  epic-2: done
+  2-1-single-screenshot-capture: done
+  2-2-real-time-websocket-screenshot-streaming: done
+  2-3-configurable-screenshot-quality: done
+  2-4-multi-device-screenshot-batch: done
+  2-5-screenshot-resizing: done
+  epic-2-retrospective: done
 
-  epic-2:
-    title: "Real-Time Visual Monitoring"
-    status: done
-    priority: P0
-    phase: MVP
-    frs_covered: [FR13, FR14, FR15, FR16, FR17, FR18]
-    depends_on: [epic-1a, epic-1b]
-    stories:
-      - id: 2-1-single-screenshot-capture
-        title: "Single Screenshot Capture"
-        status: done
-        priority: P0
-      - id: 2-2-real-time-websocket-screenshot-streaming
-        title: "Real-Time WebSocket Screenshot Streaming"
-        status: done
-        priority: P0
-      - id: 2-3-configurable-screenshot-quality
-        title: "Configurable Screenshot Quality"
-        status: done
-        priority: P1
-      - id: 2-4-multi-device-screenshot-batch
-        title: "Multi-Device Screenshot Batch"
-        status: done
-        priority: P1
-      - id: 2-5-screenshot-resizing
-        title: "Screenshot Resizing"
-        status: done
-        priority: P2
+  # Epic 3: Remote Device Control
+  epic-3: done
+  3-1-tap-command-execution: done
+  3-2-swipe-gesture-execution: done
+  3-3-text-input-to-device: done
+  3-4-physical-key-events: done
+  3-5-ui-hierarchy-inspector: done
+  3-6-shell-command-execution: done
+  epic-3-retrospective: done
 
-  epic-3:
-    title: "Remote Device Control"
-    status: done
-    priority: P0
-    phase: MVP
-    frs_covered: [FR19, FR20, FR21, FR22, FR23, FR24]
-    depends_on: [epic-1a, epic-2]
-    stories:
-      - id: 3-1-tap-command-execution
-        title: "Tap Command Execution"
-        status: done
-        priority: P0
-      - id: 3-2-swipe-gesture-execution
-        title: "Swipe Gesture Execution"
-        status: done
-        priority: P0
-      - id: 3-3-text-input-to-device
-        title: "Text Input to Device"
-        status: done
-        priority: P0
-      - id: 3-4-physical-key-events
-        title: "Physical Key Events"
-        status: done
-        priority: P1
-      - id: 3-5-ui-hierarchy-inspector
-        title: "UI Hierarchy Inspector"
-        status: done
-        priority: P2
-      - id: 3-6-shell-command-execution
-        title: "Shell Command Execution"
-        status: done
-        priority: P1
+  # Epic 4: Multi-Device Batch Operations
+  epic-4: done
+  4-1-multi-device-selection-ui: done
+  4-2-synchronized-batch-operations: done
+  4-3-action-recording-system: done
+  4-4-recording-session-management: done
+  4-5-recording-playback: done
+  4-6-batch-test-report-export: done
+  epic-4-retrospective: done
 
-  epic-4:
-    title: "Multi-Device Batch Operations"
-    status: done
-    priority: P1
-    phase: MVP
-    frs_covered: [FR25, FR26, FR27, FR28, FR29]
-    depends_on: [epic-1a, epic-2, epic-3]
-    stories:
-      - id: 4-1-multi-device-selection-ui
-        title: "Multi-Device Selection UI"
-        status: done
-        priority: P1
-        code_review: passed
-      - id: 4-2-synchronized-batch-operations
-        title: "Synchronized Batch Operations"
-        status: done
-        priority: P1
-        code_review: passed
-      - id: 4-3-action-recording-system
-        title: "Action Recording System"
-        status: done
-        priority: P2
-      - id: 4-4-recording-session-management
-        title: "Recording Session Management"
-        status: done
-        priority: P2
-      - id: 4-5-recording-playback
-        title: "Recording Playback"
-        status: done
-        priority: P2
-      - id: 4-6-batch-test-report-export
-        title: "Batch Test Report Export"
-        status: done
-        priority: P2
+  # Epic 5: External API & CI/CD Integration
+  epic-5: done
+  5-1-rest-api-device-operations: done
+  5-2-websocket-screenshot-streaming-api: done
+  5-3-device-status-and-health-api: done
+  5-4-ci-cd-integration-examples: done
+  5-5-json-rpc-websocket-interface: done
+  epic-5-retrospective: done
 
-  epic-5:
-    title: "External API & CI/CD Integration"
-    status: done
-    priority: P2
-    phase: Growth
-    frs_covered: [FR30, FR31, FR32, FR33, FR34]
-    depends_on: [epic-1a, epic-2, epic-3, epic-4]
-    stories:
-      - id: 5-1-rest-api-device-operations
-        title: "REST API Device Operations"
-        status: done
-        priority: P2
-        completed_date: "2026-03-08"
-      - id: 5-2-websocket-screenshot-streaming-api
-        title: "WebSocket Screenshot Streaming API"
-        status: done
-        priority: P2
-        completed_date: "2026-03-08"
-      - id: 5-3-device-status-and-health-api
-        title: "Device Status and Health API"
-        status: done
-        priority: P2
-        completed_date: "2026-03-08"
-      - id: 5-4-ci-cd-integration-examples
-        title: "CI/CD Integration Examples"
-        status: done
-        priority: P3
-        completed_date: "2026-03-09"
-      - id: 5-5-json-rpc-websocket-interface
-        title: "JSON-RPC WebSocket Interface"
-        status: done
-        priority: P2
-        completed_date: "2026-03-09"
+  # Epic 6: High-Fidelity Screen Mirroring
+  epic-6: done
+  6-1-scrcpy-session-management: done
+  6-2-scrcpy-device-control: done
+  6-3-h264-websocket-relay: done
+  6-4-scrcpy-session-recording: done
+  epic-6-retrospective: done
 
-  epic-6:
-    title: "High-Fidelity Screen Mirroring"
-    status: done
-    priority: P3
-    phase: Post-MVP
-    frs_covered: [FR35, FR36, FR37, FR38]
-    depends_on: [epic-1a, epic-2, epic-3, epic-4]
-    stories:
-      - id: 6-1-scrcpy-session-management
-        title: "Scrcpy Session Management"
-        status: done
-        completed_date: "2026-03-09"
-        priority: P3
-      - id: 6-2-scrcpy-device-control
-        title: "Scrcpy Device Control"
-        status: done
-        completed_date: "2026-03-09"
-        priority: P3
-      - id: 6-3-h264-websocket-relay
-        title: "H.264 WebSocket Relay"
-        status: done
-        completed_date: "2026-03-09"
-        priority: P3
-      - id: 6-4-scrcpy-session-recording
-        title: "Scrcpy Session Recording"
-        status: done
-        completed_date: "2026-03-09"
-        priority: P3
+  # ============================================================
+  # PHASE 2: Legacy Modernization & Infrastructure
+  # ============================================================
+
+  # Epic 7: Server Proxy Migration (P0 - Immediate)
+  epic-7: done
+  7-1-proxy-remote-page-device-calls: done
+  7-2-proxy-batch-control-page-device-calls: done
+  7-3-server-side-proxy-endpoints: done
+  epic-7-retrospective: done
+
+  # Epic 8: Product Catalog & Asset Tracking (P1 - Sprint 1)
+  epic-8: done
+  8-1-product-catalog-crud: done
+  8-2-device-product-association: done
+  8-3-asset-property-tracking: done
+  epic-8-retrospective: optional
+
+  # Epic 9: Provider & Node Management (P1 - Sprint 1)
+  epic-9: done
+  9-1-provider-registry: done
+  9-2-provider-presence-and-device-association: done
+  epic-9-retrospective: optional
+
+  # Epic 10: Platform Features Completion (P1 - Sprint 2)
+  epic-10: done
+  10-1-server-version-endpoint: done
+  10-2-device-reservation-system: done
+  10-3-diagnostic-test-page: done
+  10-4-legacy-endpoint-cleanup: done
+  epic-10-retrospective: optional
+
+  # Epic 11: Video Recording & Playback (P2 - Sprint 3)
+  epic-11: done
+  11-1-screen-to-video-recording: done
+  11-2-video-management: done
+  epic-11-retrospective: optional
+
+  # Epic 12: Infrastructure Hardening (P1 - Sprint 1-2)
+  epic-12: in-progress
+  12-1-api-authentication: done
+  12-2-rate-limiting: done
+  12-3-graceful-shutdown: done
+  12-4-configurable-server-settings: done
+  12-5-crash-protection-and-error-handling: done
+  12-6-working-metrics-and-monitoring: backlog
+  epic-12-retrospective: optional
+
+  # Epic 13: Code Quality & Tests (P2 - Sprint 2-3)
+  epic-13: backlog
+  13-1-shared-device-resolution-module: backlog
+  13-2-error-handling-modernization: backlog
+  13-3-frontend-modernization: backlog
+  13-4-integration-test-suite: backlog
+  13-5-dependency-cleanup: backlog
+  epic-13-retrospective: optional
 
 # Summary Statistics
 summary:
-  total_epics: 7
-  total_stories: 39
-  mvp_epics: 5
-  mvp_stories: 30
-  growth_epics: 1
-  growth_stories: 5
-  post_mvp_epics: 1
-  post_mvp_stories: 4
+  total_epics: 14
+  total_stories: 64
+  phase_1_epics: 7
+  phase_1_stories: 39
+  phase_2_epics: 7
+  phase_2_stories: 25
 
-  # Status counts (updated 2026-03-10)
   status_counts:
     epic:
-      backlog: 0
-      in_progress: 0
-      done: 7
+      backlog: 1
+      in_progress: 1
+      done: 12
     story:
-      backlog: 0
-      ready_for_dev: 0
+      backlog: 7
+      ready_for_dev: 1
       in_progress: 0
       review: 0
-      done: 39
+      done: 56
+    retrospective:
+      optional: 5
+      done: 7
 
-# Recommended Sprint Order
+# Recommended Sprint Order (Phase 2)
 recommended_order:
-  - epic: epic-1a
-    reason: "Foundational - all other epics depend on device connectivity"
-  - epic: epic-1b
-    reason: "Dashboard required for visual device management"
-  - epic: epic-2
-    reason: "Visual feedback enables control operations"
-  - epic: epic-3
-    reason: "Core control functionality for device interaction"
-  - epic: epic-4
-    reason: "Batch operations build on individual controls"
-  - epic: epic-5
-    reason: "Growth phase - external integrations"
-  - epic: epic-6
-    reason: "Post-MVP enhancement - scrcpy integration"
+  - epic: epic-7
+    reason: "P0 Critical - Server proxy migration enables cross-network access"
+  - epic: epic-12
+    reason: "P1 - Infrastructure hardening (can parallel with Epic 8/9)"
+  - epic: epic-8
+    reason: "P1 - Product catalog (can parallel with Epic 9/12)"
+  - epic: epic-9
+    reason: "P1 - Provider management (can parallel with Epic 8/12)"
+  - epic: epic-10
+    reason: "P1 - Platform features completion"
+  - epic: epic-13
+    reason: "P2 - Code quality and tests"
+  - epic: epic-11
+    reason: "P2 - Video recording (requires FFmpeg integration)"
 
 # Workflow Notes
 notes: |
+  - Phase 1 (Epics 1A-6): Complete - all 39 stories done
+  - Phase 2 (Epics 7-13): Legacy Modernization & Infrastructure
+  - Epic 7 is P0 and should be started first
+  - Epics 8, 9, 12 can be developed in parallel after Epic 7
   - All stories follow Given/When/Then acceptance criteria format
-  - Story IDs converted to kebab-case for file naming
-  - MVP epics (1A, 1B, 2, 3, 4) should be completed first
-  - Growth phase (Epic 5) after MVP validation
-  - Post-MVP (Epic 6) scrcpy integration optional
   - Run /bmad-bmm-sprint-status to check progress
+  - Run /bmad-bmm-create-story to create story files for development
   - Run /bmad-bmm-dev-story to implement a story
