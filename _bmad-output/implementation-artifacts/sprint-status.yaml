@@ -162,7 +162,7 @@ development_status:
   epic-13: in-progress
   13-1-shared-device-resolution-module: done
   13-2-error-handling-modernization: done
-  13-3-frontend-modernization: backlog
+  13-3-frontend-modernization: ready-for-dev
   13-4-integration-test-suite: backlog
   13-5-dependency-cleanup: backlog
   epic-13-retrospective: optional
@@ -182,8 +182,8 @@ summary:
       in_progress: 1
       done: 13
     story:
-      backlog: 3
-      ready_for_dev: 0
+      backlog: 2
+      ready_for_dev: 1
       in_progress: 0
       review: 0
       done: 60
