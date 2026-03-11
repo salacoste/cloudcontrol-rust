@@ -3076,7 +3076,7 @@ pub async fn feeds(req: HttpRequest, stream: web::Payload) -> HttpResponse {
                     match msg {
                         actix_ws::Message::Text(_) => {
                             let _ = session
-                                .text(serde_json::to_string(&json!({"error": false})).unwrap())
+                                .text(serde_json::to_string(&json!({"error": false})).unwrap_or_default())
                                 .await;
                         }
                         actix_ws::Message::Close(_) => break,

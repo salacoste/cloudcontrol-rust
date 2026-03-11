@@ -47,7 +47,7 @@ pub async fn nio_websocket(
                 let _ = session
                     .text(
                         serde_json::to_string(&json!({"status":"error","message":"Device not found"}))
-                            .unwrap(),
+                            .unwrap_or_default(),
                     )
                     .await;
                 let _ = session.close(None).await;
@@ -353,7 +353,7 @@ pub async fn nio_websocket(
                     };
 
                     let _ = session
-                        .text(serde_json::to_string(&result).unwrap())
+                        .text(serde_json::to_string(&result).unwrap_or_default())
                         .await;
                 }
 

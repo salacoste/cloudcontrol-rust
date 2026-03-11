@@ -617,6 +617,7 @@ dependencies = [
  "sqlx",
  "tempfile",
  "tera",
+ "thiserror",
  "tokio",
  "tokio-stream",
  "tokio-util",

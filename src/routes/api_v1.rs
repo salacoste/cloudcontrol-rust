@@ -1655,7 +1655,7 @@ pub async fn ws_screenshot(
                                     }),
                                     id: req.id,
                                 };
-                                let _ = session.text(serde_json::to_string(&error_resp).unwrap()).await;
+                                let _ = session.text(serde_json::to_string(&error_resp).unwrap_or_default()).await;
                                 continue;
                             }
 
@@ -1816,7 +1816,7 @@ pub async fn ws_screenshot(
                             };
 
                             // Send JSON-RPC response
-                            let _ = session.text(serde_json::to_string(&response).unwrap()).await;
+                            let _ = session.text(serde_json::to_string(&response).unwrap_or_default()).await;
                         }
                         Err(_) => {
                             // Invalid JSON
