@@ -85,7 +85,7 @@ fn parse_tags(v: &serde_json::Value) -> Vec<String> {
 
 /// GET /api/v1/devices - List all connected devices
 pub async fn list_devices(state: web::Data<AppState>) -> HttpResponse {
-    let phone_service = crate::services::phone_service::PhoneService::new(state.db.clone());
+    let phone_service = state.phone_service.clone();
 
     match phone_service.query_device_list_by_present().await {
         Ok(devices) => {
@@ -479,7 +479,7 @@ async fn execute_single_input(
 /// - Average battery level
 /// - List of all devices with status
 pub async fn get_device_status(state: web::Data<AppState>) -> HttpResponse {
-    let phone_service = crate::services::phone_service::PhoneService::new(state.db.clone());
+    let phone_service = state.phone_service.clone();
 
     match phone_service.query_device_list_by_present().await {
         Ok(devices) => {
@@ -597,7 +597,7 @@ pub async fn health_check(state: web::Data<AppState>) -> HttpResponse {
 /// - pool_size: Current connection pool size
 /// - screenshot_latency_seconds: Screenshot capture latency percentiles
 pub async fn get_metrics(state: web::Data<AppState>) -> HttpResponse {
-    let phone_service = crate::services::phone_service::PhoneService::new(state.db.clone());
+    let phone_service = state.phone_service.clone();
 
     let devices = phone_service.query_device_list_by_present().await.unwrap_or_default();
 
@@ -2303,7 +2303,7 @@ async fn nio_batch_input(
 // ─── Utility JSON-RPC Methods ───────────────────────────────────────────────
 
 async fn nio_list_devices(state: &AppState, id: u64) -> JsonRpcResponse {
-    let phone_service = crate::services::phone_service::PhoneService::new(state.db.clone());
+    let phone_service = state.phone_service.clone();
     match phone_service.query_device_list_by_present().await {
         Ok(devices) => rpc_result(id, json!(devices)),
         Err(e) => rpc_error(id, operation_failed(format!("Failed to list devices: {}", e))),
@@ -2320,7 +2320,7 @@ async fn nio_get_device(
         None => return rpc_error(id, missing_param("udid")),
     };
 
-    let phone_service = crate::services::phone_service::PhoneService::new(state.db.clone());
+    let phone_service = state.phone_service.clone();
     match phone_service.query_info_by_udid(udid).await {
         Ok(Some(device)) => rpc_result(id, device),
         Ok(None) => rpc_error(
@@ -2380,7 +2380,7 @@ async fn nio_screenshot(
 }
 
 async fn nio_get_status(state: &AppState, id: u64) -> JsonRpcResponse {
-    let phone_service = crate::services::phone_service::PhoneService::new(state.db.clone());
+    let phone_service = state.phone_service.clone();
     // query_device_list_by_present returns only devices with present=true (connected)
     match phone_service.query_device_list_by_present().await {
         Ok(devices) => {

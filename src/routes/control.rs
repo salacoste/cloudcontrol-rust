@@ -61,7 +61,7 @@ pub async fn remote(
         return HttpResponse::BadRequest().finish();
     }
 
-    let phone_service = crate::services::phone_service::PhoneService::new(state.db.clone());
+    let phone_service = state.phone_service.clone();
     let device = match phone_service.query_info_by_udid(&udid).await {
         Ok(Some(d)) => d,
         _ => return HttpResponse::NotFound().body("Device not found"),
@@ -81,7 +81,7 @@ pub async fn remote(
 
 /// GET /async → device_synchronous.html (auto-load all online devices)
 pub async fn async_list_get(state: web::Data<AppState>) -> HttpResponse {
-    let phone_service = crate::services::phone_service::PhoneService::new(state.db.clone());
+    let phone_service = state.phone_service.clone();
     let devices = match phone_service.query_device_list_by_present().await {
         Ok(d) => d,
         Err(_) => vec![],
@@ -140,7 +140,7 @@ pub async fn async_list_page(
     };
 
     let udid_list: Vec<&str> = udids_str.split(',').collect();
-    let phone_service = crate::services::phone_service::PhoneService::new(state.db.clone());
+    let phone_service = state.phone_service.clone();
 
     let mut ip_list = Vec::new();
     let mut first_device: Option<Value> = None;
@@ -204,7 +204,7 @@ pub async fn device_list(
     state: web::Data<AppState>,
     query: web::Query<std::collections::HashMap<String, String>>,
 ) -> HttpResponse {
-    let phone_service = crate::services::phone_service::PhoneService::new(state.db.clone());
+    let phone_service = state.phone_service.clone();
 
     // Check if tag filter is provided
     if let Some(tag) = query.get("tag") {
@@ -237,7 +237,7 @@ pub async fn device_info(
         return HttpResponse::BadRequest().finish();
     }
 
-    let phone_service = crate::services::phone_service::PhoneService::new(state.db.clone());
+    let phone_service = state.phone_service.clone();
     match phone_service.query_info_by_udid(&udid).await {
         Ok(Some(device)) => {
             let mut device_obj = device.clone();
@@ -351,7 +351,7 @@ pub async fn property_page(
         return HttpResponse::BadRequest().finish();
     }
 
-    let phone_service = crate::services::phone_service::PhoneService::new(state.db.clone());
+    let phone_service = state.phone_service.clone();
     let current_property_id = match phone_service.query_info_by_udid(&udid).await {
         Ok(Some(device)) => device
             .get("property_id")
@@ -1925,7 +1925,7 @@ pub async fn store_file_handler(
         return HttpResponse::BadRequest().finish();
     }
 
-    let phone_service = crate::services::phone_service::PhoneService::new(state.db.clone());
+    let phone_service = state.phone_service.clone();
     let device = match phone_service.query_info_by_udid(udid).await {
         Ok(Some(d)) => d,
         _ => return HttpResponse::NotFound().body("Device not found"),
@@ -2010,7 +2010,7 @@ pub async fn upload_group(
 ) -> HttpResponse {
     let upload_path = path.into_inner();
 
-    let phone_service = crate::services::phone_service::PhoneService::new(state.db.clone());
+    let phone_service = state.phone_service.clone();
     let file_service = crate::services::file_service::FileService::new(state.db.clone());
 
     // Read the file from multipart
@@ -2112,7 +2112,7 @@ pub async fn heartbeat(
         None => return HttpResponse::BadRequest().body("Missing identifier"),
     };
 
-    let phone_service = crate::services::phone_service::PhoneService::new(state.db.clone());
+    let phone_service = state.phone_service.clone();
     let sessions = state.heartbeat_sessions.clone();
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -2186,7 +2186,7 @@ pub async fn shell(
 
     let command = form.get("command").cloned().unwrap_or_default();
 
-    let phone_service = crate::services::phone_service::PhoneService::new(state.db.clone());
+    let phone_service = state.phone_service.clone();
     let device = match phone_service.query_info_by_udid(udid).await {
         Ok(Some(d)) => d,
         _ => return HttpResponse::NotFound().body("Device not found"),
@@ -2475,7 +2475,7 @@ pub async fn wifi_connect(
         "update_time": now,
     });
 
-    let phone_service = crate::services::phone_service::PhoneService::new(state.db.clone());
+    let phone_service = state.phone_service.clone();
     if let Err(e) = phone_service.update_field(&udid, &device_data).await {
         return HttpResponse::InternalServerError().json(json!({
             "status": "error",
@@ -2599,7 +2599,7 @@ pub async fn add_device(
 
     let udid = format!("{}-{}", identifier.replace(':', "-"), model.replace(' ', "_"));
 
-    let phone_service = crate::services::phone_service::PhoneService::new(state.db.clone());
+    let phone_service = state.phone_service.clone();
 
     // Check for duplicate device
     if let Ok(Some(existing)) = phone_service.query_info_by_udid(&udid).await {
@@ -2675,7 +2675,7 @@ pub async fn disconnect_device(
 ) -> HttpResponse {
     let udid = path.into_inner();
 
-    let phone_service = crate::services::phone_service::PhoneService::new(state.db.clone());
+    let phone_service = state.phone_service.clone();
 
     // Check if device exists
     match phone_service.query_info_by_udid(&udid).await {
@@ -2722,7 +2722,7 @@ pub async fn reconnect_device(
 ) -> HttpResponse {
     let udid = path.into_inner();
 
-    let phone_service = crate::services::phone_service::PhoneService::new(state.db.clone());
+    let phone_service = state.phone_service.clone();
 
     // Get device info to find IP address
     let device = match phone_service.query_info_by_udid(&udid).await {
@@ -2832,7 +2832,7 @@ pub async fn add_device_tags(
         }));
     }
 
-    let phone_service = crate::services::phone_service::PhoneService::new(state.db.clone());
+    let phone_service = state.phone_service.clone();
 
     match phone_service.add_tags(&udid, &tags).await {
         Ok(updated_tags) => {
@@ -2865,7 +2865,7 @@ pub async fn remove_device_tag(
 ) -> HttpResponse {
     let (udid, tag) = path.into_inner();
 
-    let phone_service = crate::services::phone_service::PhoneService::new(state.db.clone());
+    let phone_service = state.phone_service.clone();
 
     match phone_service.remove_tag(&udid, &tag).await {
         Ok(updated_tags) => {
@@ -2905,7 +2905,7 @@ pub async fn get_connection_history(
         .and_then(|v| v.parse().ok())
         .unwrap_or(100);
 
-    let phone_service = crate::services::phone_service::PhoneService::new(state.db.clone());
+    let phone_service = state.phone_service.clone();
 
     match phone_service.get_connection_history(&udid, limit).await {
         Ok(history) => HttpResponse::Ok().json(json!({
@@ -2936,7 +2936,7 @@ pub async fn get_connection_stats(
 ) -> HttpResponse {
     let udid = path.into_inner();
 
-    let phone_service = crate::services::phone_service::PhoneService::new(state.db.clone());
+    let phone_service = state.phone_service.clone();
 
     match phone_service.get_connection_stats(&udid).await {
         Ok(stats) => HttpResponse::Ok().json(json!({
@@ -3039,7 +3039,7 @@ pub async fn atxagent(
     let method = query.get("method").cloned().unwrap_or_default();
     let udid = query.get("udid").cloned().unwrap_or_default();
 
-    let phone_service = crate::services::phone_service::PhoneService::new(state.db.clone());
+    let phone_service = state.phone_service.clone();
     let device = match phone_service.query_info_by_udid(&udid).await {
         Ok(Some(d)) => d,
         _ => return HttpResponse::NotFound().body("Device not found"),
@@ -3188,7 +3188,7 @@ pub async fn adb_shell_ws(
     state: web::Data<AppState>,
 ) -> HttpResponse {
     let udid = path.into_inner();
-    let phone_service = crate::services::phone_service::PhoneService::new(state.db.clone());
+    let phone_service = state.phone_service.clone();
     let device = match phone_service.query_info_by_udid(&udid).await {
         Ok(Some(d)) => d,
         _ => return HttpResponse::NotFound().body("Device not found"),

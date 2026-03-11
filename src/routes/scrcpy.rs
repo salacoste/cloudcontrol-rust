@@ -534,8 +534,7 @@ async fn resolve_device_serial(
     }
 
     // Fallback to DB
-    let phone_service =
-        crate::services::phone_service::PhoneService::new(state.db.clone());
+    let phone_service = state.phone_service.clone();
     let device = phone_service
         .query_info_by_udid(udid)
         .await

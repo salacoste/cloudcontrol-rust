@@ -31,6 +31,8 @@ pub enum DeviceError {
     Disconnected(String),
     /// Database query failed
     QueryFailed(String),
+    /// Cache operation failed
+    CacheError(String),
 }
 
 impl DeviceError {
@@ -40,6 +42,7 @@ impl DeviceError {
             DeviceError::NotFound(_) => "ERR_DEVICE_NOT_FOUND",
             DeviceError::Disconnected(_) => "ERR_DEVICE_DISCONNECTED",
             DeviceError::QueryFailed(_) => "ERR_DEVICE_QUERY_FAILED",
+            DeviceError::CacheError(_) => "ERR_CACHE_ERROR",
         }
     }
 
@@ -49,6 +52,7 @@ impl DeviceError {
             DeviceError::NotFound(msg) => msg,
             DeviceError::Disconnected(msg) => msg,
             DeviceError::QueryFailed(msg) => msg,
+            DeviceError::CacheError(msg) => msg,
         }
     }
 }
@@ -69,6 +73,11 @@ impl From<DeviceError> for HttpResponse {
             DeviceError::QueryFailed(msg) => HttpResponse::InternalServerError().json(json!({
                 "status": "error",
                 "error": "ERR_DEVICE_QUERY_FAILED",
+                "message": msg
+            })),
+            DeviceError::CacheError(msg) => HttpResponse::InternalServerError().json(json!({
+                "status": "error",
+                "error": "ERR_CACHE_ERROR",
                 "message": msg
             })),
         }
@@ -257,10 +266,12 @@ mod tests {
         assert_eq!(DeviceError::NotFound("test".into()).error_code(), "ERR_DEVICE_NOT_FOUND");
         assert_eq!(DeviceError::Disconnected("test".into()).error_code(), "ERR_DEVICE_DISCONNECTED");
         assert_eq!(DeviceError::QueryFailed("test".into()).error_code(), "ERR_DEVICE_QUERY_FAILED");
+        assert_eq!(DeviceError::CacheError("test".into()).error_code(), "ERR_CACHE_ERROR");
     }
 
     #[test]
     fn test_device_error_message() {
         assert_eq!(DeviceError::NotFound("device missing".into()).message(), "device missing");
+        assert_eq!(DeviceError::CacheError("cache failed".into()).message(), "cache failed");
     }
 }
