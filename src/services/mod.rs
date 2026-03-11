@@ -1,5 +1,6 @@
 pub mod phone_service;
 pub mod device_service;
+pub mod device_resolver;
 pub mod file_service;
 pub mod device_detector;
 pub mod scrcpy_manager;

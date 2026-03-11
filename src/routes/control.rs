@@ -1,6 +1,7 @@
 use crate::device::adb::Adb;
 use crate::device::atx_client::AtxClient;
 use crate::models::recording::{ActionType, RecordActionRequest};
+use crate::services::device_resolver::DeviceResolver;
 use crate::services::device_service::DeviceService;
 use crate::state::AppState;
 use actix_multipart::Multipart;
@@ -27,84 +28,18 @@ fn get_mock_screenshot() -> &'static str {
     MOCK_DATA.get_or_init(generate_mock_screenshot)
 }
 
-// ─── Helper: get device + atx client ───
+// ═══════════════ DEVICE RESOLUTION HELPER ═══════════════
 
-async fn resolve_device_connection(device: &Value, ip: &str, port: i64) -> (String, i64) {
-    // If IP is valid and non-loopback, use it directly
-    if !ip.is_empty() && ip != "127.0.0.1" {
-        return (ip.to_string(), port);
-    }
-
-    // Already forwarded (ip=127.0.0.1 with a non-standard port) → use as-is
-    if ip == "127.0.0.1" && port != 9008 {
-        return (ip.to_string(), port);
-    }
-
-    // USB/emulator device with empty IP: try adb forward
-    let serial = device
-        .get("serial")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-    if !serial.is_empty() {
-        if let Ok(local_port) = crate::device::adb::Adb::forward(serial, 9008).await {
-            return ("127.0.0.1".to_string(), local_port as i64);
-        }
-    }
-
-    (ip.to_string(), port)
-}
-
+/// Helper function to get device info and ATX client.
+/// Uses the shared DeviceResolver module (Story 13-1).
 async fn get_device_client(
     state: &AppState,
     udid: &str,
 ) -> Result<(Value, Arc<AtxClient>), HttpResponse> {
-    // Try device info cache first
-    if let Some(cached) = state.device_info_cache.get(udid).await {
-        let ip = cached.get("ip").and_then(|v| v.as_str()).unwrap_or("");
-        let port = cached.get("port").and_then(|v| v.as_i64()).unwrap_or(9008);
-        let (final_ip, final_port) = resolve_device_connection(&cached, ip, port).await;
-        let client = state.connection_pool.get_or_create(udid, &final_ip, final_port).await;
-        return Ok((cached, client));
-    }
-
-    let phone_service = crate::services::phone_service::PhoneService::new(state.db.clone());
-    let device = phone_service
-        .query_info_by_udid(udid)
+    DeviceResolver::new(state)
+        .get_device_client(udid)
         .await
-        .map_err(|e| {
-            if e.contains("not found") {
-                HttpResponse::NotFound().json(json!({
-                    "status": "error",
-                    "error": "ERR_DEVICE_NOT_FOUND",
-                    "message": e
-                }))
-            } else if e.contains("disconnected") || e.contains("unreachable") {
-                HttpResponse::ServiceUnavailable().json(json!({
-                    "status": "error",
-                    "error": "ERR_DEVICE_DISCONNECTED",
-                    "message": e
-                }))
-            } else {
-                HttpResponse::InternalServerError().json(json!({
-                    "status": "error",
-                    "error": "ERR_DEVICE_QUERY_FAILED",
-                    "message": e
-                }))
-            }
-        })?
-        .ok_or_else(|| HttpResponse::NotFound().json(json!({
-            "status": "error",
-            "error": "ERR_DEVICE_NOT_FOUND",
-            "message": format!("Device not found: {}", udid)
-        })))?;
-
-    state.device_info_cache.insert(udid.to_string(), device.clone()).await;
-
-    let ip = device.get("ip").and_then(|v| v.as_str()).unwrap_or("");
-    let port = device.get("port").and_then(|v| v.as_i64()).unwrap_or(9008);
-    let (final_ip, final_port) = resolve_device_connection(&device, ip, port).await;
-    let client = state.connection_pool.get_or_create(udid, &final_ip, final_port).await;
-    Ok((device, client))
+        .map_err(|e| e.into())
 }
 
 // ═══════════════ PAGE ROUTES ═══════════════

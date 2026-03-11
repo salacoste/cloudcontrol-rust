@@ -6,6 +6,7 @@ use crate::models::api_response::{
     BatchTapRequest, BatchSwipeRequest, BatchInputRequest, DisplayInfo, ERR_NO_DEVICES_SELECTED,
     DeviceStatusSummary, DeviceStatusEntry, HealthCheckResponse,
 };
+use crate::services::device_resolver::DeviceResolver;
 use crate::services::device_service::DeviceService;
  use crate::state::AppState;
 use actix_web::{web, HttpRequest, HttpResponse};
@@ -25,73 +26,15 @@ const MAX_BATCH_SIZE: usize = 20;
 // Helper Functions
 // ═════════════════════════════════════════════════════════════════════════════
 
-/// Get device client from state
+/// Get device client from state using shared DeviceResolver (Story 13-1)
 async fn get_device_client(
     state: &AppState,
     udid: &str,
-) -> Result<(serde_json::Value, std::sync::Arc<crate::device::atx_client::AtxClient>), HttpResponse> {
-    // Try device info cache first
-    if let Some(cached) = state.device_info_cache.get(udid).await {
-        let ip = cached.get("ip").and_then(|v| v.as_str()).unwrap_or("");
-        let port = cached.get("port").and_then(|v| v.as_i64()).unwrap_or(9008);
-        let (final_ip, final_port) = resolve_device_connection(&cached, ip, port).await;
-        let client = state.connection_pool.get_or_create(udid, &final_ip, final_port).await;
-        return Ok((cached, client));
-    }
-
-    let phone_service = crate::services::phone_service::PhoneService::new(state.db.clone());
-    let device = phone_service
-        .query_info_by_udid(udid)
+) -> Result<(serde_json::Value, Arc<AtxClient>), HttpResponse> {
+    DeviceResolver::new(state)
+        .get_device_client(udid)
         .await
-        .map_err(|e| {
-            if e.contains("not found") {
-                HttpResponse::NotFound().json(json!({
-                    "status": "error",
-                    "error": "ERR_DEVICE_NOT_FOUND",
-                    "message": e
-                }))
-            } else {
-                HttpResponse::InternalServerError().json(json!({
-                    "status": "error",
-                    "error": "ERR_OPERATION_FAILED",
-                    "message": e
-                }))
-            }
-        })?
-        .ok_or_else(|| HttpResponse::NotFound().json(json!({
-            "status": "error",
-            "error": "ERR_DEVICE_NOT_FOUND",
-            "message": format!("Device '{}' not found", udid)
-        })))?;
-
-    state.device_info_cache.insert(udid.to_string(), device.clone()).await;
-
-    let ip = device.get("ip").and_then(|v| v.as_str()).unwrap_or("");
-    let port = device.get("port").and_then(|v| v.as_i64()).unwrap_or(9008);
-    let (final_ip, final_port) = resolve_device_connection(&device, ip, port).await;
-    let client = state.connection_pool.get_or_create(udid, &final_ip, final_port).await;
-    Ok((device, client))
-}
-
-/// Resolve device connection (WiFi vs USB)
-async fn resolve_device_connection(
-    device: &serde_json::Value,
-    ip: &str,
-    port: i64,
-) -> (String, i64) {
-    if !ip.is_empty() && ip != "127.0.0.1" {
-        return (ip.to_string(), port);
-    }
-    if ip == "127.0.0.1" && port != 9008 {
-        return (ip.to_string(), port);
-    }
-    let serial = device.get("serial").and_then(|v| v.as_str()).unwrap_or("");
-    if !serial.is_empty() {
-        if let Ok(local_port) = crate::device::adb::Adb::forward(serial, 9008).await {
-            return ("127.0.0.1".to_string(), local_port as i64);
-        }
-    }
-    (ip.to_string(), port)
+        .map_err(|e| e.into())
 }
 
 /// Create standardized error response
@@ -1910,46 +1853,15 @@ pub async fn ws_screenshot(
     resp
 }
 
-/// Helper to get device client for WebSocket (returns HTTP error response if not found)
+/// Helper to get device client for WebSocket using shared DeviceResolver (Story 13-1)
 async fn get_device_client_for_ws(
     state: &AppState,
     udid: &str,
 ) -> Result<(serde_json::Value, Arc<AtxClient>), HttpResponse> {
-    // Try device info cache first
-    if let Some(cached) = state.device_info_cache.get(udid).await {
-        let ip = cached.get("ip").and_then(|v| v.as_str()).unwrap_or("");
-        let port = cached.get("port").and_then(|v| v.as_i64()).unwrap_or(9008);
-        let (final_ip, final_port) = resolve_device_connection(&cached, ip, port).await;
-        let client = state.connection_pool.get_or_create(udid, &final_ip, final_port).await;
-        return Ok((cached, client));
-    }
-
-    let phone_service = crate::services::phone_service::PhoneService::new(state.db.clone());
-    let device = phone_service
-        .query_info_by_udid(udid)
+    DeviceResolver::new(state)
+        .get_device_client(udid)
         .await
-        .map_err(|e| {
-            HttpResponse::NotFound().json(json!({
-                "status": "error",
-                "error": "ERR_DEVICE_NOT_FOUND",
-                "message": e
-            }))
-        })?
-        .ok_or_else(|| {
-            HttpResponse::NotFound().json(json!({
-                "status": "error",
-                "error": "ERR_DEVICE_NOT_FOUND",
-                "message": format!("Device '{}' not found", udid)
-            }))
-        })?;
-
-    state.device_info_cache.insert(udid.to_string(), device.clone()).await;
-
-    let ip = device.get("ip").and_then(|v| v.as_str()).unwrap_or("");
-    let port = device.get("port").and_then(|v| v.as_i64()).unwrap_or(9008);
-    let (final_ip, final_port) = resolve_device_connection(&device, ip, port).await;
-    let client = state.connection_pool.get_or_create(udid, &final_ip, final_port).await;
-    Ok((device, client))
+        .map_err(|e| e.into())
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -2068,40 +1980,18 @@ async fn handle_nio_rpc(state: &AppState, text: &str) -> String {
 
 // ─── NIO Helpers ─────────────────────────────────────────────────────────────
 
-/// Resolve a device client from UDID for NIO operations.
+/// Resolve a device client from UDID for NIO operations using shared DeviceResolver (Story 13-1)
 async fn nio_get_client(
     state: &AppState,
     udid: &str,
 ) -> Result<(serde_json::Value, Arc<AtxClient>), JsonRpcError> {
-    // Try device info cache first (matches get_device_client pattern)
-    if let Some(cached) = state.device_info_cache.get(udid).await {
-        let ip = cached.get("ip").and_then(|v| v.as_str()).unwrap_or("");
-        let port = cached.get("port").and_then(|v| v.as_i64()).unwrap_or(9008);
-        let (final_ip, final_port) = resolve_device_connection(&cached, ip, port).await;
-        let client = state.connection_pool.get_or_create(udid, &final_ip, final_port).await;
-        return Ok((cached, client));
-    }
-
-    let phone_service = crate::services::phone_service::PhoneService::new(state.db.clone());
-    let device = phone_service
-        .query_info_by_udid(udid)
+    DeviceResolver::new(state)
+        .get_device_client(udid)
         .await
         .map_err(|e| JsonRpcError {
             code: -1,
-            message: format!("Device not found: {}", e),
-        })?
-        .ok_or_else(|| JsonRpcError {
-            code: -1,
-            message: format!("Device '{}' not found", udid),
-        })?;
-
-    state.device_info_cache.insert(udid.to_string(), device.clone()).await;
-
-    let ip = device.get("ip").and_then(|v| v.as_str()).unwrap_or("");
-    let port = device.get("port").and_then(|v| v.as_i64()).unwrap_or(9008);
-    let (final_ip, final_port) = resolve_device_connection(&device, ip, port).await;
-    let client = state.connection_pool.get_or_create(udid, &final_ip, final_port).await;
-    Ok((device, client))
+            message: e.message().to_string(),
+        })
 }
 
 fn missing_param(name: &str) -> JsonRpcError {

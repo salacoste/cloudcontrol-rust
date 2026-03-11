@@ -2,6 +2,7 @@ use crate::config::AppConfig;
 use crate::db::Database;
 use crate::pool::connection_pool::ConnectionPool;
 use crate::pool::screenshot_cache::ScreenshotCache;
+use crate::services::phone_service::PhoneService;
 use crate::services::recording_service::RecordingService;
 use crate::services::scrcpy_manager::ScrcpyManager;
 use crate::services::video_service::VideoService;
@@ -102,6 +103,8 @@ pub struct AppState {
     pub tera: tera::Tera,
     pub heartbeat_sessions: Arc<DashMap<String, HeartbeatSession>>,
     pub host_ip: String,
+    /// Phone service for device queries (Story 13-1: shared via AppState)
+    pub phone_service: Arc<PhoneService>,
     pub recording_service: RecordingService,
     /// Scrcpy session manager for high-fidelity screen mirroring (Story 6-1)
     pub scrcpy_manager: ScrcpyManager,
@@ -129,6 +132,7 @@ impl AppState {
         tera: tera::Tera,
         host_ip: String,
     ) -> Self {
+        let phone_service = Arc::new(PhoneService::new(db.clone()));
         let recording_service = RecordingService::new(db.get_pool());
         let video_service = VideoService::new(db.clone());
         let api_key_enabled = config.api_key.as_ref().map_or(false, |k| !k.is_empty());
@@ -150,6 +154,7 @@ impl AppState {
             tera,
             heartbeat_sessions: Arc::new(DashMap::new()),
             host_ip,
+            phone_service,
             recording_service,
             scrcpy_manager: ScrcpyManager::new(),
             metrics: Arc::new(MetricsTracker::new()),
