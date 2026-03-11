@@ -3259,3 +3259,122 @@ async fn adb_shell_session(
     stdout_task.abort();
     tracing::info!("[ADB_SHELL] Session ended for {}", serial);
 }
+
+// ═══════════════ UNIT TESTS ═══════════════
+
+#[cfg(test)]
+mod security_tests {
+    use super::*;
+
+    // ═══════════════ is_dangerous_command Tests ═══════════════
+
+    #[test]
+    fn test_is_dangerous_command_reboot() {
+        assert!(is_dangerous_command("reboot"));
+        assert!(is_dangerous_command("adb reboot"));
+        assert!(is_dangerous_command("REBOOT")); // case insensitive
+        assert!(is_dangerous_command("ReBoOt")); // mixed case
+    }
+
+    #[test]
+    fn test_is_dangerous_command_rm_rf() {
+        assert!(is_dangerous_command("rm -rf /data"));
+        assert!(is_dangerous_command("rm -r -f /cache"));
+        assert!(is_dangerous_command("rm -fr /system"));
+    }
+
+    #[test]
+    fn test_is_dangerous_command_factory_reset() {
+        assert!(is_dangerous_command("factory-reset"));
+        assert!(is_dangerous_command("am broadcast --es command factory-reset"));
+    }
+
+    #[test]
+    fn test_is_dangerous_command_dd() {
+        assert!(is_dangerous_command("dd if=/dev/zero of=/dev/block"));
+        assert!(is_dangerous_command("dd of=/data/test.img"));
+    }
+
+    #[test]
+    fn test_is_dangerous_command_mount() {
+        assert!(is_dangerous_command("mount /system"));
+        assert!(is_dangerous_command("umount /data"));
+    }
+
+    #[test]
+    fn test_is_dangerous_command_killall() {
+        assert!(is_dangerous_command("killall zygote"));
+        assert!(is_dangerous_command("kill -9 1234"));
+    }
+
+    #[test]
+    fn test_is_dangerous_command_pm_uninstall() {
+        assert!(is_dangerous_command("pm uninstall com.example.app"));
+        assert!(is_dangerous_command("pm clear com.example.app"));
+    }
+
+    #[test]
+    fn test_is_dangerous_command_safe_commands() {
+        assert!(!is_dangerous_command("ls -la"));
+        assert!(!is_dangerous_command("cat /proc/version"));
+        assert!(!is_dangerous_command("getprop ro.build.version"));
+        assert!(!is_dangerous_command("dumpsys activity top"));
+        assert!(!is_dangerous_command("logcat -d"));
+    }
+
+    // ═══════════════ has_dangerous_metacharacters Tests ═══════════════
+
+    #[test]
+    fn test_has_dangerous_metacharacters_semicolon() {
+        assert!(has_dangerous_metacharacters("ls ; rm -rf /"));
+        assert!(has_dangerous_metacharacters("cat file; reboot"));
+    }
+
+    #[test]
+    fn test_has_dangerous_metacharacters_and() {
+        assert!(has_dangerous_metacharacters("ls && rm -rf /"));
+        assert!(has_dangerous_metacharacters("true && reboot"));
+    }
+
+    #[test]
+    fn test_has_dangerous_metacharacters_or() {
+        assert!(has_dangerous_metacharacters("ls || rm -rf /"));
+        assert!(has_dangerous_metacharacters("false || reboot"));
+    }
+
+    #[test]
+    fn test_has_dangerous_metacharacters_pipe() {
+        assert!(has_dangerous_metacharacters("ls | cat"));
+        assert!(has_dangerous_metacharacters("cat file | grep foo"));
+    }
+
+    #[test]
+    fn test_has_dangerous_metacharacters_command_substitution() {
+        assert!(has_dangerous_metacharacters("echo $(cat /etc/passwd)"));
+        assert!(has_dangerous_metacharacters("echo `whoami`"));
+        assert!(has_dangerous_metacharacters("echo $((1+1))"));
+    }
+
+    #[test]
+    fn test_has_dangerous_metacharacters_redirect() {
+        assert!(has_dangerous_metacharacters("ls > /data/test.txt"));
+        assert!(has_dangerous_metacharacters("ls >> /system/file.txt"));
+    }
+
+    #[test]
+    fn test_has_dangerous_metacharacters_safe_commands() {
+        assert!(!has_dangerous_metacharacters("ls -la"));
+        assert!(!has_dangerous_metacharacters("cat /proc/version"));
+        assert!(!has_dangerous_metacharacters("echo hello"));
+        assert!(!has_dangerous_metacharacters("getprop ro.build.version"));
+        // These should NOT be detected (no space after)
+        assert!(!has_dangerous_metacharacters("ls|cat")); // no space after |
+    }
+
+    #[test]
+    fn test_has_dangerous_metacharacters_edge_cases() {
+        // Space required after ; for detection
+        assert!(!has_dangerous_metacharacters("ls;rm")); // no space
+        assert!(has_dangerous_metacharacters("ls; rm")); // space after
+    }
+}
