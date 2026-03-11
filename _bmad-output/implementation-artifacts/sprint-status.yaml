@@ -126,13 +126,13 @@ development_status:
   8-1-product-catalog-crud: done
   8-2-device-product-association: done
   8-3-asset-property-tracking: done
-  epic-8-retrospective: optional
+  epic-8-retrospective: done
 
   # Epic 9: Provider & Node Management (P1 - Sprint 1)
   epic-9: done
   9-1-provider-registry: done
   9-2-provider-presence-and-device-association: done
-  epic-9-retrospective: optional
+  epic-9-retrospective: done
 
   # Epic 10: Platform Features Completion (P1 - Sprint 2)
   epic-10: done
@@ -140,23 +140,23 @@ development_status:
   10-2-device-reservation-system: done
   10-3-diagnostic-test-page: done
   10-4-legacy-endpoint-cleanup: done
-  epic-10-retrospective: optional
+  epic-10-retrospective: done
 
   # Epic 11: Video Recording & Playback (P2 - Sprint 3)
   epic-11: done
   11-1-screen-to-video-recording: done
   11-2-video-management: done
-  epic-11-retrospective: optional
+  epic-11-retrospective: done
 
   # Epic 12: Infrastructure Hardening (P1 - Sprint 1-2)
-  epic-12: in-progress
+  epic-12: done
   12-1-api-authentication: done
   12-2-rate-limiting: done
   12-3-graceful-shutdown: done
   12-4-configurable-server-settings: done
   12-5-crash-protection-and-error-handling: done
-  12-6-working-metrics-and-monitoring: backlog
-  epic-12-retrospective: optional
+  12-6-working-metrics-and-monitoring: done
+  epic-12-retrospective: done
 
   # Epic 13: Code Quality & Tests (P2 - Sprint 2-3)
   epic-13: backlog
@@ -179,17 +179,17 @@ summary:
   status_counts:
     epic:
       backlog: 1
-      in_progress: 1
-      done: 12
+      in_progress: 0
+      done: 13
     story:
       backlog: 7
       ready_for_dev: 1
       in_progress: 0
       review: 0
-      done: 56
+      done: 57
     retrospective:
-      optional: 5
-      done: 7
+      optional: 0
+      done: 12
 
 # Recommended Sprint Order (Phase 2)
 recommended_order:
