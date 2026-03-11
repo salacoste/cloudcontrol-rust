@@ -1,4 +1,5 @@
 use crate::device::adb::Adb;
+use crate::error::AppError;
 use crate::models::recording::{
     ActionType, RecordActionRequest, RecordedAction, StartRecordingRequest,
     StopRecordingRequest, EditActionRequest,
@@ -128,19 +129,12 @@ pub async fn get_recording(
             "recording": recording
         })),
         Err(e) => {
-            if e.contains("not found") {
-                HttpResponse::NotFound().json(json!({
-                    "status": "error",
-                    "error": "ERR_RECORDING_NOT_FOUND",
-                    "message": e
-                }))
+            let error: AppError = if e.contains("not found") {
+                AppError::RecordingNotFound(e)
             } else {
-                HttpResponse::InternalServerError().json(json!({
-                    "status": "error",
-                    "error": "ERR_GET_RECORDING_FAILED",
-                    "message": e
-                }))
-            }
+                AppError::RecordingError(e)
+            };
+            error.into()
         }
     }
 }
@@ -158,19 +152,12 @@ pub async fn delete_recording(
             "message": format!("Recording {} deleted", recording_id)
         })),
         Err(e) => {
-            if e.contains("not found") {
-                HttpResponse::NotFound().json(json!({
-                    "status": "error",
-                    "error": "ERR_RECORDING_NOT_FOUND",
-                    "message": e
-                }))
+            let error: AppError = if e.contains("not found") {
+                AppError::RecordingNotFound(e)
             } else {
-                HttpResponse::InternalServerError().json(json!({
-                    "status": "error",
-                    "error": "ERR_DELETE_RECORDING_FAILED",
-                    "message": e
-                }))
-            }
+                AppError::RecordingError(e)
+            };
+            error.into()
         }
     }
 }
@@ -583,9 +570,11 @@ pub async fn start_playback(
             HttpResponse::Ok().json(response)
         }
         Err(e) => {
-            let (status, error_code) = if e.contains("not found") {
-                (actix_web::http::StatusCode::NOT_FOUND, "ERR_RECORDING_NOT_FOUND")
-            } else if e == "ERR_RECORDING_HAS_NO_ACTIONS" {
+            // Use AppError for not found, specific codes for business logic errors
+            if e.contains("not found") {
+                return AppError::RecordingNotFound(e).into();
+            }
+            let (status, error_code) = if e == "ERR_RECORDING_HAS_NO_ACTIONS" {
                 (actix_web::http::StatusCode::BAD_REQUEST, "ERR_RECORDING_HAS_NO_ACTIONS")
             } else if e == "ERR_PLAYBACK_ALREADY_ACTIVE" {
                 (actix_web::http::StatusCode::BAD_REQUEST, "ERR_PLAYBACK_ALREADY_ACTIVE")

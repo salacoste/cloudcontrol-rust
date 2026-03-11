@@ -1,5 +1,6 @@
 use crate::device::adb::Adb;
 use crate::device::atx_client::AtxClient;
+use crate::error::IntoAppError;
 use crate::models::recording::{ActionType, RecordActionRequest};
 use crate::services::device_resolver::DeviceResolver;
 use crate::services::device_service::DeviceService;
@@ -796,14 +797,9 @@ pub async fn batch_screenshot(
                 success_count += 1;
             }
             Err(e) => {
-                // More precise error classification matching AC spec
-                let error_code = if e.contains("not found") {
-                    "ERR_DEVICE_NOT_FOUND"
-                } else if e.contains("disconnected") || e.contains("unreachable") {
-                    "ERR_DEVICE_DISCONNECTED"
-                } else {
-                    "ERR_SCREENSHOT_FAILED"
-                };
+                // Use IntoAppError for type-safe error classification
+                let app_error = e.clone().into_app_error("screenshot");
+                let error_code = app_error.error_code();
                 response_results.insert(udid.clone(), json!({
                     "status": "error",
                     "error": error_code,
@@ -2841,20 +2837,7 @@ pub async fn add_device_tags(
                 "tags": updated_tags
             }))
         }
-        Err(e) => {
-            if e.contains("not found") {
-                HttpResponse::NotFound().json(json!({
-                    "status": "error",
-                    "error": "ERR_DEVICE_NOT_FOUND",
-                    "message": e
-                }))
-            } else {
-                HttpResponse::InternalServerError().json(json!({
-                    "status": "error",
-                    "message": e
-                }))
-            }
-        }
+        Err(e) => e.into_app_error("device operation").into()
     }
 }
 
@@ -2874,20 +2857,7 @@ pub async fn remove_device_tag(
                 "tags": updated_tags
             }))
         }
-        Err(e) => {
-            if e.contains("not found") {
-                HttpResponse::NotFound().json(json!({
-                    "status": "error",
-                    "error": "ERR_DEVICE_NOT_FOUND",
-                    "message": e
-                }))
-            } else {
-                HttpResponse::InternalServerError().json(json!({
-                    "status": "error",
-                    "message": e
-                }))
-            }
-        }
+        Err(e) => e.into_app_error("device operation").into()
     }
 }
 
@@ -2912,20 +2882,7 @@ pub async fn get_connection_history(
             "status": "ok",
             "history": history
         })),
-        Err(e) => {
-            if e.contains("not found") {
-                HttpResponse::NotFound().json(json!({
-                    "status": "error",
-                    "error": "ERR_DEVICE_NOT_FOUND",
-                    "message": e
-                }))
-            } else {
-                HttpResponse::InternalServerError().json(json!({
-                    "status": "error",
-                    "message": e
-                }))
-            }
-        }
+        Err(e) => e.into_app_error("device operation").into()
     }
 }
 
@@ -2943,20 +2900,7 @@ pub async fn get_connection_stats(
             "status": "ok",
             "stats": stats
         })),
-        Err(e) => {
-            if e.contains("not found") {
-                HttpResponse::NotFound().json(json!({
-                    "status": "error",
-                    "error": "ERR_DEVICE_NOT_FOUND",
-                    "message": e
-                }))
-            } else {
-                HttpResponse::InternalServerError().json(json!({
-                    "status": "error",
-                    "message": e
-                }))
-            }
-        }
+        Err(e) => e.into_app_error("device operation").into()
     }
 }
 

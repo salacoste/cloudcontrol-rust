@@ -91,6 +91,10 @@ pub enum AppError {
     #[error("Invalid request: {0}")]
     InvalidRequest(String),
 
+    /// Recording not found
+    #[error("Recording not found: {0}")]
+    RecordingNotFound(String),
+
     /// Recording operation failed
     #[error("Recording error: {0}")]
     RecordingError(String),
@@ -109,6 +113,7 @@ impl AppError {
             AppError::DatabaseError(_) => "ERR_DATABASE_ERROR",
             AppError::SerializationError(_) => "ERR_SERIALIZATION_ERROR",
             AppError::InvalidRequest(_) => "ERR_INVALID_REQUEST",
+            AppError::RecordingNotFound(_) => "ERR_RECORDING_NOT_FOUND",
             AppError::RecordingError(_) => "ERR_RECORDING_ERROR",
             AppError::RegexError(_) => "ERR_REGEX_ERROR",
         }
@@ -151,6 +156,11 @@ impl From<AppError> for HttpResponse {
             AppError::InvalidRequest(msg) => HttpResponse::BadRequest().json(json!({
                 "status": "error",
                 "error": "ERR_INVALID_REQUEST",
+                "message": msg
+            })),
+            AppError::RecordingNotFound(msg) => HttpResponse::NotFound().json(json!({
+                "status": "error",
+                "error": "ERR_RECORDING_NOT_FOUND",
                 "message": msg
             })),
             AppError::RecordingError(msg) => HttpResponse::InternalServerError().json(json!({

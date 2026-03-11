@@ -1,6 +1,6 @@
 # Story 13.2: Error Handling Modernization
 
-Status: review
+Status: done
 
 ## Story
 
@@ -19,13 +19,15 @@ so that **error handling is type-safe and maintainable**.
 - [x] Task 1: Create error types with thiserror (AC: #1)
   - [x] 1.1 Add `thiserror` to Cargo.toml if not present
   - [x] 1.2 Create `src/error.rs` with `AppError` enum covering common error cases
-  - [x] 1.3 Define variants: `DeviceNotFound`, `DeviceDisconnected`, `DatabaseError`, `SerializationError`, `InvalidRequest`, `RecordingError`, `RegexError`
+  - [x] 1.3 Define variants: `DeviceNotFound`, `DeviceDisconnected`, `DatabaseError`, `SerializationError`, `InvalidRequest`, `RecordingNotFound`, `RecordingError`, `RegexError`
   - [x] 1.4 Implement `From<AppError> for HttpResponse` for HTTP response conversion
 
 - [x] Task 2: Refactor string-based error discrimination (AC: #1)
   - [x] 2.1 Added `IntoAppError` trait for converting string errors to AppError
-  - [x] 2.2 String matching in device_resolver.rs is intentional — converts external service errors
-  - [x] 2.3 Added `error_code()`, `is_not_found()`, `is_disconnected()` helper methods
+  - [x] 2.2 Added `RecordingNotFound` variant for 404 recording errors
+  - [x] 2.3 Integrated AppError into `recording.rs` — 3 string matching patterns replaced
+  - [x] 2.4 Integrated IntoAppError into `control.rs` — 5 string matching patterns replaced
+  - [x] 2.5 Added `error_code()`, `is_not_found()`, `is_disconnected()` helper methods
 
 - [x] Task 3: Replace critical unwrap() calls (AC: #2)
   - [x] 3.1 `control.rs:1299` - ANALYZED: guarded by `pattern.is_some()` check — safe
@@ -44,6 +46,12 @@ so that **error handling is type-safe and maintainable**.
   - [x] 5.1 Build succeeds with 0 new warnings
   - [x] 5.2 All 226 tests pass
   - [x] 5.3 No behavioral regressions
+
+- [x] Task 6: Code Review Fixes (Post-Review)
+  - [x] 6.1 HIGH-1: Integrated AppError into recording.rs and control.rs
+  - [x] 6.2 HIGH-2: Replaced string matching with IntoAppError trait usage
+  - [x] 6.3 MEDIUM-1/2/3: AppError now used in production code, not dead code
+  - [x] 6.4 MEDIUM-4: Added Cargo.lock to File List
 
 ## Dev Notes
 
@@ -226,22 +234,28 @@ None
 
 ### Completion Notes List
 
-1. **AppError enum created** — Added `thiserror` derive for type-safe error handling with 7 variants
+1. **AppError enum created** — Added `thiserror` derive for type-safe error handling with 8 variants (including RecordingNotFound)
 2. **IntoAppError trait** — Provides ergonomic conversion from String errors to AppError
 3. **WebSocket serialization** — Fixed 5 unsafe serde_json unwraps across 3 files
 4. **Guarded unwraps analyzed** — Remaining unwraps are safe (guarded by prior checks, constants, or test code)
-5. **String matching intentional** — device_resolver.rs string matching converts external service errors, not internal code
+5. **AppError integrated** — Now used in recording.rs (3 locations) and control.rs (5 locations) for type-safe error responses
+6. **Code review fixes** — Addressed 2 HIGH and 4 MEDIUM issues found in adversarial review
 
 ### File List
 
 | File | Action | Description |
 |------|--------|-------------|
 | `Cargo.toml` | Modified | Added `thiserror = "2"` dependency |
-| `src/error.rs` | Modified | Extended with AppError enum, IntoAppError trait, tests |
+| `Cargo.lock` | Modified | Auto-updated for thiserror dependency |
+| `src/error.rs` | Modified | Extended with AppError enum (8 variants), IntoAppError trait, tests |
 | `src/routes/api_v1.rs` | Modified | Fixed 2 serde_json unwraps (lines 1658, 1819) |
-| `src/routes/control.rs` | Modified | Fixed 1 serde_json unwrap (line 3079) |
+| `src/routes/control.rs` | Modified | Fixed 1 serde_json unwrap; integrated IntoAppError (5 locations) |
 | `src/routes/nio.rs` | Modified | Fixed 2 serde_json unwraps (lines 50, 356) |
+| `src/routes/recording.rs` | Modified | Integrated AppError for type-safe error responses (3 locations) |
 
 ## Change Log
 
 - 2026-03-12: Story created from epics-v2.md
+- 2026-03-12: Initial implementation complete
+- 2026-03-12: Code review found 2 HIGH, 4 MEDIUM issues — AppError not integrated into codebase
+- 2026-03-12: Fixed all review issues — integrated AppError into recording.rs and control.rs
