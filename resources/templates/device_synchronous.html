@@ -1856,7 +1856,6 @@ window.app = new Vue({
 
         // Copy phrase to clipboard
         copyPhrase: function(text) {
-            var self = this;
             // Use modern copyToClipboard from common.js (handles fallback internally)
             if (typeof copyToClipboard === 'function') {
                 copyToClipboard(text).then(function(success) {
@@ -2400,6 +2399,7 @@ window.app = new Vue({
             var wheelStartXP = 0;
 
             element.addEventListener('mousedown', mouseDownListener);
+            // passive:false required to allow preventDefault() for scroll behavior
             element.addEventListener('wheel', mouseWheelListener, { passive: false });
         }
     }

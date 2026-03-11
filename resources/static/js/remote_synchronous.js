@@ -491,6 +491,7 @@ window.app = new Vue({
 
             /* bind listeners */
             element.addEventListener('mousedown', mouseDownListener);
+            // passive:false required to allow preventDefault() for scroll behavior
             element.addEventListener('wheel', mouseWheelListener, { passive: false });
         }
     }

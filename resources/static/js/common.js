@@ -21,7 +21,7 @@ function copyToClipboard(text) {
 function fallbackCopyToClipboard(text) {
   // IE specific code path
   if (window.clipboardData && window.clipboardData.setData) {
-    return clipboardData.setData("Text", text);
+    return window.clipboardData.setData("Text", text);
   }
 
   // Standard fallback using textarea

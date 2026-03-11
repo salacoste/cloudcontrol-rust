@@ -1,6 +1,6 @@
 # Story 13.3: Frontend Modernization
 
-Status: review
+Status: done
 
 ## Story
 
@@ -144,6 +144,7 @@ None
 - 2026-03-12: Clipboard API implementation includes fallback for older browsers
 - 2026-03-12: Wheel delta direction correctly inverted (wheelDeltaY < 0 → deltaY > 0)
 - 2026-03-12: All 226 tests pass - no regressions
+- 2026-03-12: Code review fixes - IE11 fallback bug, unused variable, added passive:false comments
 
 ### File List
 
