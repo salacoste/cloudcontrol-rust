@@ -3314,6 +3314,27 @@ mod security_tests {
     }
 
     #[test]
+    fn test_is_dangerous_command_shutdown_restart() {
+        assert!(is_dangerous_command("shutdown"));
+        assert!(is_dangerous_command("restart"));
+        assert!(is_dangerous_command("adb shutdown"));
+        assert!(is_dangerous_command("SHUTDOWN")); // case insensitive
+    }
+
+    #[test]
+    fn test_is_dangerous_command_init() {
+        assert!(is_dangerous_command("init 6"));
+        assert!(is_dangerous_command("init 0"));
+        assert!(is_dangerous_command("adb init 6"));
+    }
+
+    #[test]
+    fn test_is_dangerous_command_chmod() {
+        assert!(is_dangerous_command("chmod -r 777 /data"));
+        assert!(is_dangerous_command("chmod 777 /system"));
+    }
+
+    #[test]
     fn test_is_dangerous_command_safe_commands() {
         assert!(!is_dangerous_command("ls -la"));
         assert!(!is_dangerous_command("cat /proc/version"));
