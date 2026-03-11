@@ -8,6 +8,7 @@ use crate::services::video_service::VideoService;
 use dashmap::DashMap;
 use moka::future::Cache;
 use serde_json::Value;
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Mutex;
 use std::sync::Arc;
@@ -23,11 +24,11 @@ pub struct HeartbeatSession {
     pub timer: f64,
 }
 
-/// Metrics tracker for screenshot latency and connection counts (Story 5-3)
+/// Metrics tracker for screenshot latency and connection counts (Story 5-3, Story 12-6)
 #[derive(Debug)]
 pub struct MetricsTracker {
-    /// Screenshot latency samples in seconds (last 1000)
-    pub screenshot_latencies: Mutex<Vec<f64>>,
+    /// Screenshot latency samples in seconds (last 1000) - VecDeque for O(1) operations (Story 12-6)
+    pub screenshot_latencies: Mutex<VecDeque<f64>>,
     /// WebSocket connection count
     pub websocket_count: AtomicU32,
 }
@@ -35,18 +36,18 @@ pub struct MetricsTracker {
 impl MetricsTracker {
     pub fn new() -> Self {
         Self {
-            screenshot_latencies: Mutex::new(Vec::with_capacity(1000)),
+            screenshot_latencies: Mutex::new(VecDeque::with_capacity(1000)),
             websocket_count: AtomicU32::new(0),
         }
     }
 
-    /// Record a screenshot latency sample
+    /// Record a screenshot latency sample (Story 12-6: O(1) with VecDeque)
     pub fn record_screenshot_latency(&self, latency_secs: f64) {
         if let Ok(mut latencies) = self.screenshot_latencies.lock() {
-            latencies.push(latency_secs);
-            // Keep only last 1000 samples
+            latencies.push_back(latency_secs);
+            // Keep only last 1000 samples - O(1) pop_front vs O(n) remove(0)
             if latencies.len() > 1000 {
-                latencies.remove(0);
+                latencies.pop_front();
             }
         }
     }
@@ -57,7 +58,8 @@ impl MetricsTracker {
             if latencies.is_empty() {
                 return None;
             }
-            let mut sorted = latencies.clone();
+            // Convert to Vec for sorting (needed for percentile calculation)
+            let mut sorted: Vec<f64> = latencies.iter().copied().collect();
             sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
             let idx = ((sorted.len() - 1) as f64 * percentile) as usize;
             Some(sorted[idx])

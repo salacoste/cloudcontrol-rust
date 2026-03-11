@@ -91,6 +91,9 @@ pub async fn scrcpy_websocket(
     let state = state.into_inner().clone();
     let udid_clone = udid.clone();
 
+    // Track WebSocket connection (Story 12-6)
+    state.metrics.increment_ws_count();
+
     actix_web::rt::spawn(async move {
         // Look up managed session — must already be started via REST
         let (info, control_handle) =
@@ -104,6 +107,7 @@ pub async fn scrcpy_websocket(
                         })))
                         .await;
                     let _ = session.close(None).await;
+                    state.metrics.decrement_ws_count(); // Story 12-6: cleanup on early exit
                     return;
                 }
             };
@@ -119,6 +123,7 @@ pub async fn scrcpy_websocket(
                     })))
                     .await;
                 let _ = session.close(None).await;
+                state.metrics.decrement_ws_count(); // Story 12-6: cleanup on early exit
                 return;
             }
         };
@@ -132,6 +137,7 @@ pub async fn scrcpy_websocket(
             "deviceName": info.device_name,
         });
         if session.text(safe_json(&init_msg)).await.is_err() {
+            state.metrics.decrement_ws_count(); // Story 12-6: cleanup on early exit
             return;
         }
 
@@ -231,6 +237,9 @@ pub async fn scrcpy_websocket(
         // Cleanup: abort video consumer task for this viewer and close WS
         video_task.abort();
         let _ = session.close(None).await;
+
+        // Decrement WebSocket count (Story 12-6)
+        state.metrics.decrement_ws_count();
 
         tracing::info!("[Scrcpy WS] Viewer disconnected for {}", udid_clone);
     });

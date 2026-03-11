@@ -56,6 +56,9 @@ pub async fn video_convert_ws(
 
     let state = state.into_inner().clone();
 
+    // Track WebSocket connection (Story 12-6)
+    state.metrics.increment_ws_count();
+
     actix_web::rt::spawn(async move {
         // Start recording
         let recording_id = match state.video_service.start_recording(&udid, fps, device_name).await {
@@ -88,6 +91,7 @@ pub async fn video_convert_ws(
                     )
                     .await;
                 let _ = session.close(None).await;
+                state.metrics.decrement_ws_count(); // Story 12-6: cleanup on early exit
                 return;
             }
         };
@@ -147,6 +151,7 @@ pub async fn video_convert_ws(
         }
 
         let _ = session.close(None).await;
+        state.metrics.decrement_ws_count(); // Story 12-6: cleanup
     });
 
     resp

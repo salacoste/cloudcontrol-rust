@@ -647,9 +647,11 @@ pub async fn inspector_screenshot_img(
 
         // Primary: u2 JSON-RPC takeScreenshot (device-side scale+compress, fastest)
         if let Ok(jpeg_bytes) = client.screenshot_scaled(scale, quality).await {
+            let elapsed = t0.elapsed().as_secs_f64();
+            state.metrics.record_screenshot_latency(elapsed);
             tracing::info!(
                 "[HTTP] /screenshot/img u2-scaled total={:.0}ms | {}KB",
-                t0.elapsed().as_secs_f64() * 1000.0,
+                elapsed * 1000.0,
                 jpeg_bytes.len() / 1024,
             );
             return Ok(jpeg_bytes);
@@ -658,9 +660,11 @@ pub async fn inspector_screenshot_img(
         // Fallback 1: USB ADB screencap
         if is_usb && !serial.is_empty() {
             if let Ok(jpeg_bytes) = DeviceService::screenshot_usb_jpeg(serial, quality, scale).await {
+                let elapsed = t0.elapsed().as_secs_f64();
+                state.metrics.record_screenshot_latency(elapsed);
                 tracing::info!(
                     "[HTTP] /screenshot/img ADB-fallback total={:.0}ms | {}KB",
-                    t0.elapsed().as_secs_f64() * 1000.0,
+                    elapsed * 1000.0,
                     jpeg_bytes.len() / 1024,
                 );
                 return Ok(jpeg_bytes);
@@ -670,9 +674,11 @@ pub async fn inspector_screenshot_img(
         // Fallback 2: u2 full screenshot + server-side resize
         match DeviceService::screenshot_jpeg(&client, quality, scale).await {
             Ok(bytes) => {
+                let elapsed = t0.elapsed().as_secs_f64();
+                state.metrics.record_screenshot_latency(elapsed);
                 tracing::info!(
                     "[HTTP] /screenshot/img u2-resize total={:.0}ms | {}KB",
-                    t0.elapsed().as_secs_f64() * 1000.0,
+                    elapsed * 1000.0,
                     bytes.len() / 1024,
                 );
                 Ok(bytes)
@@ -682,6 +688,8 @@ pub async fn inspector_screenshot_img(
                 if !serial.is_empty() && !is_usb {
                     if let Ok(png_bytes) = Adb::screencap(serial).await {
                         if let Ok(jpeg_bytes) = DeviceService::raw_screenshot_to_jpeg(&png_bytes, quality, scale) {
+                            let elapsed = t0.elapsed().as_secs_f64();
+                            state.metrics.record_screenshot_latency(elapsed);
                             return Ok(jpeg_bytes);
                         }
                     }
@@ -774,6 +782,7 @@ pub async fn batch_screenshot(
         let state_clone = state.clone();
         let task = async move {
             let udid = udid.clone();
+            let t0 = std::time::Instant::now();
             // Get device and client
             match get_device_client(&state_clone, &udid).await {
                 Ok((device, client)) => {
@@ -787,6 +796,8 @@ pub async fn batch_screenshot(
 
                     // Primary: u2 JSON-RPC takeScreenshot
                     if let Ok(jpeg_bytes) = client.screenshot_scaled(scale, quality).await {
+                        let elapsed = t0.elapsed().as_secs_f64();
+                        state_clone.metrics.record_screenshot_latency(elapsed);
                         let b64 = base64::engine::general_purpose::STANDARD.encode(&jpeg_bytes);
                         return (udid, Ok(b64));
                     }
@@ -794,18 +805,26 @@ pub async fn batch_screenshot(
                     // Fallback 1: USB ADB screencap
                     if is_usb && !serial.is_empty() {
                         if let Ok(b64) = DeviceService::screenshot_usb_base64(serial, quality, scale).await {
+                            let elapsed = t0.elapsed().as_secs_f64();
+                            state_clone.metrics.record_screenshot_latency(elapsed);
                             return (udid, Ok(b64));
                         }
                     }
 
                     // Fallback 2: u2 full screenshot + server-side resize
                     match DeviceService::screenshot_base64(&client, quality, scale).await {
-                        Ok(b64) => (udid, Ok(b64)),
+                        Ok(b64) => {
+                            let elapsed = t0.elapsed().as_secs_f64();
+                            state_clone.metrics.record_screenshot_latency(elapsed);
+                            (udid, Ok(b64))
+                        }
                         Err(e) => {
                             // Final fallback: ADB screencap
                             if !serial.is_empty() && !is_usb {
                                 if let Ok(png_bytes) = Adb::screencap(serial).await {
                                     if let Ok(b64) = DeviceService::encode_screenshot(&png_bytes, quality, scale) {
+                                        let elapsed = t0.elapsed().as_secs_f64();
+                                        state_clone.metrics.record_screenshot_latency(elapsed);
                                         return (udid, Ok(b64));
                                     }
                                 }

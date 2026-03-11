@@ -223,7 +223,10 @@ pub async fn get_screenshot(
     match get_device_client(&state, &udid).await {
         Ok((_device, client)) => {
             // Use screenshot_base64_direct for fastest response
+            let start = std::time::Instant::now();
             let result = client.screenshot_base64_direct().await;
+            let elapsed = start.elapsed().as_secs_f64();
+            state.metrics.record_screenshot_latency(elapsed);
 
             match result {
                 Ok(base64_data) => {
@@ -1572,6 +1575,10 @@ pub async fn ws_screenshot(
         }
     };
 
+    // Clone state for the spawned task (Story 12-6: WS counting)
+    let state = state.into_inner().clone();
+    state.metrics.increment_ws_count();
+
     // Spawn streaming task
     actix_web::rt::spawn(async move {
         let serial = device
@@ -1593,6 +1600,7 @@ pub async fn ws_screenshot(
         let client_clone = client.clone();
         let mut session_clone = session.clone();
         let udid_clone = udid.clone();
+        let state_clone = state.clone(); // Story 12-6: for latency recording
 
         // Spawn screenshot streaming task
         let stream_handle = tokio::spawn(async move {
@@ -1641,6 +1649,9 @@ pub async fn ws_screenshot(
 
                         frame_count += 1;
                         let total = start.elapsed();
+
+                        // Record screenshot latency (Story 12-6)
+                        state_clone.metrics.record_screenshot_latency(total.as_secs_f64());
 
                         // Log every 20 frames
                         if frame_count % 20 == 0 {
@@ -1891,6 +1902,7 @@ pub async fn ws_screenshot(
         // Cleanup
         running.store(false, std::sync::atomic::Ordering::Relaxed);
         stream_handle.abort();
+        state.metrics.decrement_ws_count(); // Story 12-6
 
         tracing::info!("[API-V1-WS] WebSocket session closed: {}", udid);
     });

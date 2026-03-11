@@ -34,6 +34,9 @@ pub async fn nio_websocket(
     let state = state.into_inner().clone();
     let udid_clone = udid.clone();
 
+    // Track WebSocket connection (Story 12-6)
+    state.metrics.increment_ws_count();
+
     actix_web::rt::spawn(async move {
         // Get device info and create client
         let phone_service =
@@ -48,6 +51,7 @@ pub async fn nio_websocket(
                     )
                     .await;
                 let _ = session.close(None).await;
+                state.metrics.decrement_ws_count(); // Story 12-6: cleanup on early exit
                 return;
             }
         };
@@ -114,6 +118,7 @@ pub async fn nio_websocket(
                                         .unwrap_or("")
                                         .to_string();
                                     let is_usb = Adb::is_usb_serial(&serial);
+                                    let metrics = state.metrics.clone(); // Story 12-6: for latency recording
 
                                     let handle = tokio::spawn(async move {
                                         let min_interval =
@@ -152,6 +157,9 @@ pub async fn nio_websocket(
                                                 Ok(jpeg_bytes) => {
                                                     let t_capture = start.elapsed();
                                                     let jpeg_size = jpeg_bytes.len();
+
+                                                    // Record screenshot latency (Story 12-6)
+                                                    metrics.record_screenshot_latency(t_capture.as_secs_f64());
 
                                                     let t_send_start = std::time::Instant::now();
                                                     // Send as binary WebSocket frame
@@ -360,6 +368,9 @@ pub async fn nio_websocket(
         if let Some(handle) = task_guard.take() {
             handle.abort();
         }
+
+        // Decrement WebSocket count (Story 12-6)
+        state.metrics.decrement_ws_count();
 
         tracing::info!("[NIO] WebSocket session closed: {}", udid_clone);
     });
