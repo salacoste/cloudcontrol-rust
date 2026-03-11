@@ -172,7 +172,7 @@ impl AppConfig {
         let path_ref = path.as_ref();
         let content = std::fs::read_to_string(path_ref)
             .map_err(|e| format!("Failed to read config file '{}': {}", path_ref.display(), e))?;
-        let config: AppConfig = serde_yaml::from_str(&content)
+        let config: AppConfig = serde_yml::from_str(&content)
             .map_err(|e| format!("Failed to parse config file '{}': {}", path_ref.display(), e))?;
         config.validate()?;
         tracing::info!("Configuration loaded successfully from {}", path_ref.display());
@@ -252,7 +252,7 @@ mod tests {
     #[test]
     fn test_config_defaults() {
         let yaml = "{}";
-        let config: AppConfig = serde_yaml::from_str(yaml).unwrap();
+        let config: AppConfig = serde_yml::from_str(yaml).unwrap();
         assert_eq!(config.server.port, 8000);
         assert_eq!(config.db_configs.db_name, "cloudcontrol.db");
         assert_eq!(config.db_configs.r#type, "sqlite");
@@ -267,14 +267,14 @@ mod tests {
     #[test]
     fn test_config_with_api_key() {
         let yaml = "api_key: my-secret-key";
-        let config: AppConfig = serde_yaml::from_str(yaml).unwrap();
+        let config: AppConfig = serde_yml::from_str(yaml).unwrap();
         assert_eq!(config.api_key, Some("my-secret-key".to_string()));
     }
 
     #[test]
     fn test_config_without_api_key() {
         let yaml = "{}";
-        let config: AppConfig = serde_yaml::from_str(yaml).unwrap();
+        let config: AppConfig = serde_yml::from_str(yaml).unwrap();
         assert_eq!(config.api_key, None);
     }
 
@@ -288,7 +288,7 @@ rate_limit:
     screenshot: 10
     batch: 5
 "#;
-        let config: AppConfig = serde_yaml::from_str(yaml).unwrap();
+        let config: AppConfig = serde_yml::from_str(yaml).unwrap();
         let rl = config.rate_limit.unwrap();
         assert_eq!(rl.requests_per_window, 50);
         assert_eq!(rl.window_secs, 30);
@@ -299,14 +299,14 @@ rate_limit:
     #[test]
     fn test_config_without_rate_limit() {
         let yaml = "{}";
-        let config: AppConfig = serde_yaml::from_str(yaml).unwrap();
+        let config: AppConfig = serde_yml::from_str(yaml).unwrap();
         assert!(config.rate_limit.is_none());
     }
 
     #[test]
     fn test_config_rate_limit_defaults() {
         let yaml = "rate_limit: {}";
-        let config: AppConfig = serde_yaml::from_str(yaml).unwrap();
+        let config: AppConfig = serde_yml::from_str(yaml).unwrap();
         let rl = config.rate_limit.unwrap();
         assert_eq!(rl.requests_per_window, 100);
         assert_eq!(rl.window_secs, 60);
@@ -327,7 +327,7 @@ rate_limit:
     #[test]
     fn test_config_pool_defaults() {
         let yaml = "{}";
-        let config: AppConfig = serde_yaml::from_str(yaml).unwrap();
+        let config: AppConfig = serde_yml::from_str(yaml).unwrap();
         assert_eq!(config.pool.max_size, 1200);
         assert_eq!(config.pool.idle_timeout_secs, 600);
     }
@@ -335,7 +335,7 @@ rate_limit:
     #[test]
     fn test_config_cache_defaults() {
         let yaml = "{}";
-        let config: AppConfig = serde_yaml::from_str(yaml).unwrap();
+        let config: AppConfig = serde_yml::from_str(yaml).unwrap();
         assert_eq!(config.cache.device_info_max, 500);
         assert_eq!(config.cache.device_info_ttl_secs, 300);
     }
@@ -347,7 +347,7 @@ pool:
   max_size: 2000
   idle_timeout_secs: 900
 "#;
-        let config: AppConfig = serde_yaml::from_str(yaml).unwrap();
+        let config: AppConfig = serde_yml::from_str(yaml).unwrap();
         assert_eq!(config.pool.max_size, 2000);
         assert_eq!(config.pool.idle_timeout_secs, 900);
     }
@@ -359,7 +359,7 @@ cache:
   device_info_max: 1000
   device_info_ttl_secs: 600
 "#;
-        let config: AppConfig = serde_yaml::from_str(yaml).unwrap();
+        let config: AppConfig = serde_yml::from_str(yaml).unwrap();
         assert_eq!(config.cache.device_info_max, 1000);
         assert_eq!(config.cache.device_info_ttl_secs, 600);
     }
@@ -368,12 +368,12 @@ cache:
     fn test_config_description_alias() {
         // Test that "descption" (typo) still works via alias
         let yaml = "descption: old-style-description";
-        let config: AppConfig = serde_yaml::from_str(yaml).unwrap();
+        let config: AppConfig = serde_yml::from_str(yaml).unwrap();
         assert_eq!(config.description, Some("old-style-description".to_string()));
 
         // Test that "description" (correct) works
         let yaml = "description: new-style-description";
-        let config: AppConfig = serde_yaml::from_str(yaml).unwrap();
+        let config: AppConfig = serde_yml::from_str(yaml).unwrap();
         assert_eq!(config.description, Some("new-style-description".to_string()));
     }
 
@@ -381,7 +381,7 @@ cache:
     fn test_config_pool_partial() {
         // Test that partial pool config uses defaults for missing fields
         let yaml = "pool: { max_size: 500 }";
-        let config: AppConfig = serde_yaml::from_str(yaml).unwrap();
+        let config: AppConfig = serde_yml::from_str(yaml).unwrap();
         assert_eq!(config.pool.max_size, 500);
         assert_eq!(config.pool.idle_timeout_secs, 600); // default
     }
@@ -390,7 +390,7 @@ cache:
     fn test_config_cache_partial() {
         // Test that partial cache config uses defaults for missing fields
         let yaml = "cache: { device_info_max: 200 }";
-        let config: AppConfig = serde_yaml::from_str(yaml).unwrap();
+        let config: AppConfig = serde_yml::from_str(yaml).unwrap();
         assert_eq!(config.cache.device_info_max, 200);
         assert_eq!(config.cache.device_info_ttl_secs, 300); // default
     }
@@ -400,7 +400,7 @@ cache:
     #[test]
     fn test_config_validation_pool_max_size_too_low() {
         let yaml = "pool: { max_size: 0 }";
-        let config: AppConfig = serde_yaml::from_str(yaml).unwrap();
+        let config: AppConfig = serde_yml::from_str(yaml).unwrap();
         let err = config.validate().unwrap_err();
         assert!(err.contains("pool.max_size"));
         assert!(err.contains("must be >="));
@@ -409,7 +409,7 @@ cache:
     #[test]
     fn test_config_validation_pool_max_size_too_high() {
         let yaml = "pool: { max_size: 999999999 }";
-        let config: AppConfig = serde_yaml::from_str(yaml).unwrap();
+        let config: AppConfig = serde_yml::from_str(yaml).unwrap();
         let err = config.validate().unwrap_err();
         assert!(err.contains("pool.max_size"));
         assert!(err.contains("must be <="));
@@ -418,7 +418,7 @@ cache:
     #[test]
     fn test_config_validation_pool_idle_timeout_too_low() {
         let yaml = "pool: { idle_timeout_secs: 0 }";
-        let config: AppConfig = serde_yaml::from_str(yaml).unwrap();
+        let config: AppConfig = serde_yml::from_str(yaml).unwrap();
         let err = config.validate().unwrap_err();
         assert!(err.contains("pool.idle_timeout_secs"));
     }
@@ -426,7 +426,7 @@ cache:
     #[test]
     fn test_config_validation_cache_max_too_low() {
         let yaml = "cache: { device_info_max: 0 }";
-        let config: AppConfig = serde_yaml::from_str(yaml).unwrap();
+        let config: AppConfig = serde_yml::from_str(yaml).unwrap();
         let err = config.validate().unwrap_err();
         assert!(err.contains("cache.device_info_max"));
     }
@@ -434,7 +434,7 @@ cache:
     #[test]
     fn test_config_validation_cache_ttl_too_low() {
         let yaml = "cache: { device_info_ttl_secs: 0 }";
-        let config: AppConfig = serde_yaml::from_str(yaml).unwrap();
+        let config: AppConfig = serde_yml::from_str(yaml).unwrap();
         let err = config.validate().unwrap_err();
         assert!(err.contains("cache.device_info_ttl_secs"));
     }
@@ -450,7 +450,7 @@ cache:
   device_info_max: 1
   device_info_ttl_secs: 86400
 "#;
-        let config: AppConfig = serde_yaml::from_str(yaml).unwrap();
+        let config: AppConfig = serde_yml::from_str(yaml).unwrap();
         assert!(config.validate().is_ok());
     }
 
@@ -458,7 +458,7 @@ cache:
     fn test_config_validation_defaults_pass() {
         // Default values should always pass validation
         let yaml = "{}";
-        let config: AppConfig = serde_yaml::from_str(yaml).unwrap();
+        let config: AppConfig = serde_yml::from_str(yaml).unwrap();
         assert!(config.validate().is_ok());
     }
 }

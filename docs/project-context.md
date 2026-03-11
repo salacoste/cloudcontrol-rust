@@ -63,7 +63,7 @@ The server discovers Android devices over USB and WiFi, communicates with them v
 | Image processing | image | 0.25 | JPEG resize (Nearest filter) |
 | XML parsing | quick-xml | 0.37 | UI hierarchy dump |
 | Logging | tracing + tracing-subscriber | 0.1 / 0.3 | Structured logging to stdout + daily rolling file |
-| Serialization | serde / serde_json / serde_yaml | 1.x | JSON API + YAML config |
+| Serialization | serde / serde_json / serde_yml | 1.x | JSON API + YAML config |
 
 ### External Dependencies (on-device)
 
