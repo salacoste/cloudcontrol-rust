@@ -2,6 +2,7 @@ use crate::config::AppConfig;
 use crate::db::Database;
 use crate::pool::connection_pool::ConnectionPool;
 use crate::pool::screenshot_cache::ScreenshotCache;
+use crate::services::auth_service::AuthService;
 use crate::services::phone_service::PhoneService;
 use crate::services::recording_service::RecordingService;
 use crate::services::scrcpy_manager::ScrcpyManager;
@@ -118,6 +119,8 @@ pub struct AppState {
     pub video_service: VideoService,
     /// Whether FFmpeg is available on the system (Story 11-1)
     pub ffmpeg_available: bool,
+    /// Authentication service for JWT-based auth (Story 14-1)
+    pub auth_service: Option<Arc<AuthService>>,
     /// Whether API key authentication is enabled (Story 12-1)
     pub api_key_enabled: bool,
     /// Whether rate limiting is enabled (Story 12-2)
@@ -137,6 +140,25 @@ impl AppState {
         let video_service = VideoService::new(db.clone());
         let api_key_enabled = config.api_key.as_ref().map_or(false, |k| !k.is_empty());
         let rate_limiting_enabled = config.rate_limit.is_some();
+
+        // Initialize auth service if JWT is configured (Story 14-1)
+        let auth_service = config.auth.as_ref().and_then(|auth_config| {
+            if auth_config.jwt_secret.is_some() {
+                match AuthService::new(db.get_pool(), auth_config) {
+                    Ok(service) => {
+                        tracing::info!("JWT authentication initialized");
+                        Some(Arc::new(service))
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to initialize auth service: {}", e);
+                        None
+                    }
+                }
+            } else {
+                tracing::info!("JWT authentication disabled (no jwt_secret configured)");
+                None
+            }
+        });
 
         // Use configurable cache settings (Story 12-4)
         let device_info_max = config.cache.device_info_max;
@@ -162,6 +184,7 @@ impl AppState {
             reserved_devices: Arc::new(DashMap::new()),
             video_service,
             ffmpeg_available: false, // Set at startup after async check
+            auth_service,
             api_key_enabled,
             rate_limiting_enabled,
         }

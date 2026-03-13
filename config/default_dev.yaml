@@ -25,11 +25,19 @@ db_configs:
 # API authentication (optional — if not set, all endpoints are open)
 # api_key: "your-secret-key-here"
 
+# JWT authentication configuration (Story 14-1)
+# IMPORTANT: Set JWT_SECRET environment variable in production!
+auth:
+  # jwt_secret: "${JWT_SECRET}"  # Use environment variable in production
+  access_token_expiry_minutes: 15
+  refresh_token_expiry_days: 7
+
 # Rate limiting (optional — if not set, rate limiting is disabled)
 # rate_limit:
 #   requests_per_window: 100   # max requests per IP per window
 #   window_secs: 60            # window size in seconds
 #   category_limits:           # per-category overrides
+#     auth: 5                  # 5 requests per minute for login/register (Story 14-1)
 #     screenshot: 30
 #     batch: 10
 #     control: 60

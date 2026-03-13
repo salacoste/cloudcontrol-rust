@@ -1,4 +1,5 @@
 pub mod api_v1;
+pub mod auth;
 pub mod batch_report;
 pub mod control;
 pub mod nio;

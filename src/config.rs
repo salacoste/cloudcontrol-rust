@@ -34,6 +34,42 @@ pub struct AppConfig {
     /// Rate limiting configuration (Story 12-2). If None, rate limiting is disabled.
     #[serde(default)]
     pub rate_limit: Option<RateLimitConfig>,
+    /// JWT authentication configuration (Story 14-1).
+    #[serde(default)]
+    pub auth: Option<AuthConfig>,
+}
+
+/// JWT authentication configuration (Story 14-1).
+#[derive(Debug, Clone, Deserialize)]
+pub struct AuthConfig {
+    /// JWT secret key for signing tokens. REQUIRED in production.
+    /// Should be at least 32 characters.
+    #[serde(default)]
+    pub jwt_secret: Option<String>,
+    /// Access token expiry in minutes (default: 15)
+    #[serde(default = "default_access_token_expiry_minutes")]
+    pub access_token_expiry_minutes: u64,
+    /// Refresh token expiry in days (default: 7)
+    #[serde(default = "default_refresh_token_expiry_days")]
+    pub refresh_token_expiry_days: u64,
+}
+
+impl Default for AuthConfig {
+    fn default() -> Self {
+        Self {
+            jwt_secret: None,
+            access_token_expiry_minutes: default_access_token_expiry_minutes(),
+            refresh_token_expiry_days: default_refresh_token_expiry_days(),
+        }
+    }
+}
+
+fn default_access_token_expiry_minutes() -> u64 {
+    15
+}
+
+fn default_refresh_token_expiry_days() -> u64 {
+    7
 }
 
 /// Connection pool configuration (Story 12-4).

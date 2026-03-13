@@ -1,7 +1,7 @@
 use actix_web::body::EitherBody;
 use actix_web::dev::{Service, ServiceRequest, ServiceResponse, Transform};
 use actix_web::http::Method;
-use actix_web::{Error, HttpResponse};
+use actix_web::{Error, HttpResponse, HttpMessage};
 use crate::config::RateLimitConfig;
 use dashmap::DashMap;
 use futures::future::{ok, Either, Ready};
@@ -267,7 +267,12 @@ impl RateLimiter {
 /// Categorize an endpoint path for rate limit category overrides.
 /// Order matters: batch is checked before screenshot because
 /// `/api/screenshot/batch` is a batch operation, not a single screenshot.
+/// Auth endpoints are checked early for stricter rate limiting (Story 14-1).
 pub fn categorize_endpoint(path: &str) -> Option<&'static str> {
+    // Auth endpoints - stricter rate limiting (Story 14-1)
+    if path.starts_with("/api/v1/auth/login") || path.starts_with("/api/v1/auth/register") {
+        return Some("auth");
+    }
     // Batch must be checked first — /api/screenshot/batch is a batch operation
     if path.starts_with("/api/batch/") || path.starts_with("/api/v1/batch/") || path == "/api/screenshot/batch" {
         return Some("batch");
@@ -394,6 +399,11 @@ where
             ))
         } else {
             tracing::debug!("Rate limited IP {} on {}", ip, req.path());
+            // Use CC-SYS-902 for auth endpoints (Story 14-1), ERR_RATE_LIMITED for others
+            let (error_code, message): (&str, String) = match category {
+                Some("auth") => ("CC-SYS-902", "Too many authentication attempts. Please try again later.".to_string()),
+                _ => ("ERR_RATE_LIMITED", format!("Rate limit exceeded. Try again in {} seconds.", result.reset_secs)),
+            };
             let response = HttpResponse::TooManyRequests()
                 .insert_header(("Retry-After", result.reset_secs.to_string()))
                 .insert_header(("X-RateLimit-Limit", result.limit.to_string()))
@@ -401,8 +411,8 @@ where
                 .insert_header(("X-RateLimit-Reset", result.reset_secs.to_string()))
                 .json(serde_json::json!({
                     "status": "error",
-                    "error": "ERR_RATE_LIMITED",
-                    "message": format!("Rate limit exceeded. Try again in {} seconds.", result.reset_secs),
+                    "error": error_code,
+                    "message": message,
                     "timestamp": chrono::Utc::now().to_rfc3339()
                 }));
             Either::Right(ok(req.into_response(response).map_into_right_body()))
@@ -604,6 +614,16 @@ mod tests {
     }
 
     #[test]
+    fn test_categorize_endpoint_auth() {
+        // Auth endpoints should be rate limited more strictly (Story 14-1)
+        assert_eq!(categorize_endpoint("/api/v1/auth/login"), Some("auth"));
+        assert_eq!(categorize_endpoint("/api/v1/auth/register"), Some("auth"));
+        // Other auth endpoints use default rate limit
+        assert_eq!(categorize_endpoint("/api/v1/auth/refresh"), None);
+        assert_eq!(categorize_endpoint("/api/v1/auth/logout"), None);
+    }
+
+    #[test]
     fn test_categorize_endpoint_control() {
         assert_eq!(categorize_endpoint("/inspector/abc/touch"), Some("control"));
         assert_eq!(categorize_endpoint("/inspector/abc/input"), Some("control"));
@@ -644,4 +664,177 @@ mod tests {
         let rl = RateLimit::new(Some(limiter));
         assert!(rl.limiter.is_some());
     }
+}
+
+// ═══════════════ JWT AUTHENTICATION (Story 14-1) ═══════════════
+
+use crate::models::user::UserInfo;
+use crate::services::auth_service::AuthService;
+
+/// JWT authentication middleware (Story 14-1).
+///
+/// Validates JWT access tokens and injects user info into request.
+/// When no auth service is configured, all requests pass through.
+pub struct JwtAuth {
+    auth_service: Option<Arc<AuthService>>,
+}
+
+impl JwtAuth {
+    pub fn new(auth_service: Option<Arc<AuthService>>) -> Self {
+        Self { auth_service }
+    }
+}
+
+impl<S, B> Transform<S, ServiceRequest> for JwtAuth
+where
+    S: Service<ServiceRequest, Response = ServiceResponse<B>, Error = Error>,
+    S::Future: 'static,
+    B: 'static,
+{
+    type Response = ServiceResponse<EitherBody<B>>;
+    type Error = Error;
+    type Transform = JwtAuthMiddleware<S>;
+    type InitError = ();
+    type Future = Ready<Result<Self::Transform, Self::InitError>>;
+
+    fn new_transform(&self, service: S) -> Self::Future {
+        ok(JwtAuthMiddleware {
+            service,
+            auth_service: self.auth_service.clone(),
+        })
+    }
+}
+
+pub struct JwtAuthMiddleware<S> {
+    service: S,
+    auth_service: Option<Arc<AuthService>>,
+}
+
+impl<S, B> Service<ServiceRequest> for JwtAuthMiddleware<S>
+where
+    S: Service<ServiceRequest, Response = ServiceResponse<B>, Error = Error>,
+    S::Future: 'static,
+    B: 'static,
+{
+    type Response = ServiceResponse<EitherBody<B>>;
+    type Error = Error;
+    type Future = Either<
+        futures::future::Map<S::Future, fn(Result<ServiceResponse<B>, Error>) -> Result<ServiceResponse<EitherBody<B>>, Error>>,
+        Ready<Result<ServiceResponse<EitherBody<B>>, Error>>,
+    >;
+
+    fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        self.service.poll_ready(cx)
+    }
+
+    fn call(&self, req: ServiceRequest) -> Self::Future {
+        let auth_service = match &self.auth_service {
+            Some(service) => service,
+            None => {
+                // Auth disabled — pass through
+                return Either::Left(futures::future::FutureExt::map(
+                    self.service.call(req),
+                    |res| res.map(|r| r.map_into_left_body()),
+                ));
+            }
+        };
+
+        // Check if path is exempt from JWT auth
+        if is_jwt_exempt(req.path()) {
+            return Either::Left(futures::future::FutureExt::map(
+                self.service.call(req),
+                |res| res.map(|r| r.map_into_left_body()),
+            ));
+        }
+
+        // Extract Bearer token
+        let token = match extract_bearer_token(&req) {
+            Some(t) => t,
+            None => {
+                let response = HttpResponse::Unauthorized()
+                    .json(serde_json::json!({
+                        "status": "error",
+                        "error": "CC-AUTH-103",
+                        "message": "Missing or invalid Authorization header"
+                    }));
+                return Either::Right(ok(req.into_response(response).map_into_right_body()));
+            }
+        };
+
+        // Validate token
+        match auth_service.validate_token(&token) {
+            Ok(claims) => {
+                // Inject user info into request
+                let user_info = UserInfo {
+                    id: claims.sub.clone(),
+                    email: claims.email.clone(),
+                    role: claims.role.clone(),
+                };
+                req.extensions_mut().insert(user_info);
+                Either::Left(futures::future::FutureExt::map(
+                    self.service.call(req),
+                    |res| res.map(|r| r.map_into_left_body()),
+                ))
+            }
+            Err(e) => {
+                let (error_code, message) = match e {
+                    crate::services::auth_service::AuthError::TokenExpired => ("CC-AUTH-102", "Token expired"),
+                    _ => ("CC-AUTH-103", "Invalid token"),
+                };
+                let response = HttpResponse::Unauthorized()
+                    .json(serde_json::json!({
+                        "status": "error",
+                        "error": error_code,
+                        "message": message
+                    }));
+                Either::Right(ok(req.into_response(response).map_into_right_body()))
+            }
+        }
+    }
+}
+
+/// Check if a path is exempt from JWT authentication.
+fn is_jwt_exempt(path: &str) -> bool {
+    // Auth endpoints
+    if path == "/api/v1/auth/register"
+        || path == "/api/v1/auth/login"
+        || path == "/api/v1/auth/refresh"
+        || path == "/api/v1/auth/status"
+    {
+        return true;
+    }
+
+    // Health and OpenAPI
+    if path == "/api/v1/health" || path == "/api/v1/openapi.json" {
+        return true;
+    }
+
+    // Static files
+    if path.starts_with("/static/") {
+        return true;
+    }
+
+    // Page routes (HTML pages)
+    if path == "/"
+        || path == "/async"
+        || path == "/installfile"
+        || path == "/test"
+        || path == "/files"
+        || path == "/providers"
+        || path == "/atxagent"
+    {
+        return true;
+    }
+
+    // Dynamic page routes
+    if path.starts_with("/devices/")
+        && (path.ends_with("/remote")
+            || path.ends_with("/edit")
+            || path.ends_with("/property")
+            || path.ends_with("/reserved"))
+    {
+        return true;
+    }
+
+    false
 }

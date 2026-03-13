@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use cloudcontrol::config::{AppConfig, CacheConfig, DbConfig, PoolConfig, RateLimitConfig, ServerConfig};
+use cloudcontrol::config::{AppConfig, AuthConfig, CacheConfig, DbConfig, PoolConfig, RateLimitConfig, ServerConfig};
 use cloudcontrol::db::Database;
 use cloudcontrol::pool::connection_pool::ConnectionPool;
 use cloudcontrol::state::AppState;
@@ -57,6 +57,7 @@ pub fn make_test_config() -> AppConfig {
         cache: CacheConfig::default(),
         api_key: None,
         rate_limit: None,
+        auth: None,
     }
 }
 
@@ -98,10 +99,31 @@ pub fn make_test_config_with_cache(device_info_max: u64, device_info_ttl_secs: u
     config
 }
 
+/// Create a test AppConfig with JWT authentication enabled (Story 14-1).
+pub fn make_test_config_with_jwt_auth(jwt_secret: &str) -> AppConfig {
+    let mut config = make_test_config();
+    config.auth = Some(AuthConfig {
+        jwt_secret: Some(jwt_secret.to_string()),
+        access_token_expiry_minutes: 15,
+        refresh_token_expiry_days: 7,
+    });
+    config
+}
+
 /// Create a complete test AppState with a temporary database.
 pub async fn create_test_app_state() -> (TempDir, AppState) {
     let (tmp, db) = create_temp_db().await;
     let config = make_test_config();
+    let pool = ConnectionPool::new(100, Duration::from_secs(60));
+    let tera = tera::Tera::new("resources/templates/**/*").unwrap();
+    let state = AppState::new(db, config, pool, tera, "127.0.0.1".to_string());
+    (tmp, state)
+}
+
+/// Create a test AppState with JWT authentication enabled (Story 14-1).
+pub async fn create_test_app_state_with_jwt_auth() -> (TempDir, AppState) {
+    let (tmp, db) = create_temp_db().await;
+    let config = make_test_config_with_jwt_auth("test-secret-key-at-least-32-characters-long");
     let pool = ConnectionPool::new(100, Duration::from_secs(60));
     let tera = tera::Tera::new("resources/templates/**/*").unwrap();
     let state = AppState::new(db, config, pool, tera, "127.0.0.1".to_string());

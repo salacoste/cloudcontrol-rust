@@ -167,28 +167,86 @@ development_status:
   13-5-dependency-cleanup: done
   epic-13-retrospective: done
 
+  # ============================================================
+  # PHASE 3: Multi-User & Anti-Detection (MVP: 14 stories)
+  # ============================================================
+
+  # Epic 14: Multi-User Authentication
+  epic-14: in-progress
+  14-1-user-registration-and-login: done
+  14-2-role-based-access-control: ready-for-dev
+  14-3-team-organization-scoping: backlog
+  14-4-session-management: backlog
+  14-5-activity-audit-logging: backlog
+  14-6-tenant-isolation-foundation: backlog
+  epic-14-retrospective: optional
+
+  # Epic 15: Profile Management System
+  epic-15: backlog
+  15-1-profile-data-model-and-storage: backlog
+  15-2-fingerprint-configuration: backlog
+  15-3-location-gps-configuration: backlog
+  15-4-carrier-network-configuration: backlog
+  15-5-profile-device-binding: backlog
+  15-6a-profile-check-out-workflow: backlog
+  15-6b-profile-check-in-workflow: backlog
+  15-7-app-data-extraction-restore: backlog
+  15-8-profile-templates: backlog
+  15-9-profile-ownership-scoping: backlog
+  epic-15-retrospective: optional
+
+  # Epic 16: Device Agent APK
+  epic-16: backlog
+  16-1-agent-apk-foundation: backlog
+  16-2-server-connection-and-authentication: backlog
+  16-3-profile-sync-and-config-receiver: backlog
+  16-4-health-monitoring-and-heartbeat: backlog
+  16-5-fingerprint-spoofing-module: backlog
+  16-6-gps-mock-location-module: backlog
+  16-7-carrier-spoofing-module: backlog
+  epic-16-retrospective: optional
+
+  # Epic 17: Webhook Notifications
+  epic-17: backlog
+  17-1-webhook-infrastructure: backlog
+  17-2-telegram-integration: backlog
+  17-3-browser-push-notifications: backlog
+  17-4-event-configuration-ui: backlog
+  17-5-per-user-notification-preferences: backlog
+  epic-17-retrospective: optional
+
+  # Epic 18: Device Rental (Growth Phase)
+  epic-18: backlog
+  18-1-device-availability-and-booking: backlog
+  18-2-rental-session-management: backlog
+  18-3-usage-tracking-and-billing-hooks: backlog
+  18-4-customer-portal: backlog
+  epic-18-retrospective: optional
+
 # Summary Statistics
 summary:
-  total_epics: 14
-  total_stories: 63
+  total_epics: 19
+  total_stories: 93
   phase_1_epics: 7
   phase_1_stories: 38
   phase_2_epics: 7
   phase_2_stories: 25
+  phase_3_epics: 5
+  phase_3_stories: 32
 
   status_counts:
     epic:
-      backlog: 0
-      in_progress: 0
-      done: 14
+      backlog: 5
+      in_progress: 1
+      done: 13
     story:
-      backlog: 0
-      ready_for_dev: 0
+      backlog: 31
+      ready_for_dev: 1
       in_progress: 0
       review: 0
       done: 63
     retrospective:
-      optional: 0
+      optional: 5
       done: 14
 
 # Recommended Sprint Order (Phase 2)

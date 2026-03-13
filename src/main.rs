@@ -406,6 +406,14 @@ async fn main() -> std::io::Result<()> {
             .route("/api/v1/products/{id}", web::get().to(routes::api_v1::get_product))
             .route("/api/v1/products/{id}", web::put().to(routes::api_v1::update_product))
             .route("/api/v1/products/{id}", web::delete().to(routes::api_v1::delete_product))
+            // ── Authentication API (Story 14-1) ──
+            .route("/api/v1/auth/register", web::post().to(routes::auth::register))
+            .route("/api/v1/auth/login", web::post().to(routes::auth::login))
+            .route("/api/v1/auth/refresh", web::post().to(routes::auth::refresh))
+            .route("/api/v1/auth/logout", web::post().to(routes::auth::logout))
+            .route("/api/v1/auth/logout-all", web::post().to(routes::auth::logout_all))
+            .route("/api/v1/auth/me", web::get().to(routes::auth::get_me))
+            .route("/api/v1/auth/status", web::get().to(routes::auth::auth_status))
             // ── Provider Registry API ──
             .route("/api/v1/providers", web::get().to(routes::api_v1::list_providers))
             .route("/api/v1/providers", web::post().to(routes::api_v1::create_provider))
