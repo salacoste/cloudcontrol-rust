@@ -435,8 +435,18 @@ impl AuthService {
     }
 
     /// Logout user (revoke refresh token)
-    pub async fn logout(&self, refresh_token: &str) -> Result<(), AuthError> {
+    /// Returns (user_id, session_id) for audit logging (Story 14-5)
+    pub async fn logout(&self, refresh_token: &str) -> Result<Option<(String, String)>, AuthError> {
         let token_hash = self.hash_refresh_token(refresh_token);
+
+        // First, get the session info for audit logging
+        let session_info: Option<(String, String)> = sqlx::query_as(
+            "SELECT user_id, id FROM refresh_tokens WHERE token_hash = ? AND revoked = 0"
+        )
+        .bind(&token_hash)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
 
         let result = sqlx::query("UPDATE refresh_tokens SET revoked = 1 WHERE token_hash = ?")
             .bind(&token_hash)
@@ -448,7 +458,7 @@ impl AuthService {
             tracing::info!("User logged out (refresh token revoked)");
         }
 
-        Ok(())
+        Ok(session_info)
     }
 
     /// Logout all sessions for a user

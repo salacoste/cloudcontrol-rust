@@ -297,7 +297,20 @@ pub async fn logout(
     };
 
     match auth_service.logout(&body.refresh_token).await {
-        Ok(()) => {
+        Ok(session_info) => {
+            // Log logout event (Story 14-5)
+            if let (Some(audit_service), Some((user_id, session_id))) = (&state.audit_service, &session_info) {
+                let entry = CreateAuditEntry::user_logout(user_id, session_id);
+                let audit_service = audit_service.clone();
+                let user_id = user_id.clone();
+                let session_id = session_id.clone();
+                actix_web::rt::spawn(async move {
+                    if let Err(e) = audit_service.log_event(&entry).await {
+                        tracing::warn!("Failed to log audit event for logout (user: {}, session: {}): {}", user_id, session_id, e);
+                    }
+                });
+            }
+
             tracing::info!("User logged out successfully");
             HttpResponse::Ok().json(serde_json::json!({
                 "status": "success",

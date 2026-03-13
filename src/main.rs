@@ -421,6 +421,8 @@ async fn main() -> std::io::Result<()> {
             // ── Admin API (Story 14-2: RBAC) ──
             .route("/api/v1/admin/users", web::get().to(routes::admin::list_users))
             .route("/api/v1/admin/users/{id}/role", web::post().to(routes::admin::assign_role))
+            // ── Audit Log API (Story 14-5) ──
+            .route("/api/v1/admin/audit-log", web::get().to(routes::admin::list_audit_log))
             // ── Provider Registry API ──
             .route("/api/v1/providers", web::get().to(routes::api_v1::list_providers))
             .route("/api/v1/providers", web::post().to(routes::api_v1::create_provider))
