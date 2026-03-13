@@ -5,6 +5,7 @@
 use actix_web::{web, HttpRequest, HttpResponse};
 use validator::Validate;
 
+use crate::models::audit::CreateAuditEntry;
 use crate::models::user::{LoginRequest, LogoutRequest, RefreshRequest, RegisterRequest, UserInfo};
 use crate::services::auth_service::AuthError;
 use crate::state::AppState;
@@ -191,6 +192,24 @@ pub async fn login(
         .await
     {
         Ok(response) => {
+            // Log successful login (Story 14-5)
+            if let Some(audit_service) = &state.audit_service {
+                let entry = CreateAuditEntry::user_login(
+                    &response.user.id,
+                    &response.user.email,
+                    &response.session_id,
+                    Some(&ip),
+                    user_agent.as_deref(),
+                );
+                // Fire-and-forget audit logging - don't block response
+                let audit_service = audit_service.clone();
+                actix_web::rt::spawn(async move {
+                    if let Err(e) = audit_service.log_event(&entry).await {
+                        tracing::warn!("Failed to log audit event: {}", e);
+                    }
+                });
+            }
+
             tracing::info!("User logged in successfully: {}", body.email);
             HttpResponse::Ok().json(serde_json::json!({
                 "status": "success",
@@ -198,6 +217,26 @@ pub async fn login(
             }))
         }
         Err(e) => {
+            // Log failed login attempt (Story 14-5)
+            if let Some(audit_service) = &state.audit_service {
+                let reason = match &e {
+                    AuthError::InvalidCredentials => "invalid_credentials",
+                    AuthError::UserNotFound => "user_not_found",
+                    _ => "unknown_error",
+                };
+                let entry = CreateAuditEntry::user_login_failed(
+                    &body.email,
+                    reason,
+                    Some(&ip),
+                );
+                let audit_service = audit_service.clone();
+                actix_web::rt::spawn(async move {
+                    if let Err(e) = audit_service.log_event(&entry).await {
+                        tracing::warn!("Failed to log audit event: {}", e);
+                    }
+                });
+            }
+
             tracing::warn!("Login failed for {}: {}", body.email, e);
             auth_error_to_response(e)
         }
@@ -368,6 +407,17 @@ pub async fn revoke_session(
 
     match auth_service.revoke_session(&user.id, &session_id).await {
         Ok(response) => {
+            // Log session revocation (Story 14-5)
+            if let Some(audit_service) = &state.audit_service {
+                let entry = CreateAuditEntry::session_revoked(&user.id, &session_id);
+                let audit_service = audit_service.clone();
+                actix_web::rt::spawn(async move {
+                    if let Err(e) = audit_service.log_event(&entry).await {
+                        tracing::warn!("Failed to log audit event: {}", e);
+                    }
+                });
+            }
+
             tracing::info!("Session {} revoked for user {}", session_id, user.id);
             HttpResponse::Ok().json(serde_json::json!({
                 "status": "success",

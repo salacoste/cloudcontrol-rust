@@ -331,6 +331,7 @@ impl AuthService {
                 role,
                 team_id,
             },
+            session_id: refresh_token_id,
         })
     }
 

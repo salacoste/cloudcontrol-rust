@@ -524,6 +524,11 @@ impl Database {
             .execute(&self.pool)
             .await?;
 
+        // Index for date range queries (Story 14-5)
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_audit_log_created_at ON audit_log(created_at)")
+            .execute(&self.pool)
+            .await?;
+
         Ok(())
     }
 

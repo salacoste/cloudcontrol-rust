@@ -177,7 +177,7 @@ development_status:
   14-2-role-based-access-control: done
   14-3-team-organization-scoping: done
   14-4-session-management: done
-  14-5-activity-audit-logging: backlog
+  14-5-activity-audit-logging: done
   14-6-tenant-isolation-foundation: backlog
   epic-14-retrospective: optional
 
@@ -243,8 +243,8 @@ summary:
       backlog: 31
       ready_for_dev: 0
       in_progress: 0
-      review: 1
-      done: 63
+      review: 0
+      done: 64
     retrospective:
       optional: 5
       done: 14

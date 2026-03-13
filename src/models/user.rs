@@ -160,6 +160,9 @@ pub struct AuthResponse {
     pub token_type: String,
     pub expires_in: u64,
     pub user: UserInfo,
+    /// Session ID for audit logging (not serialized to client - Story 14-5)
+    #[serde(skip)]
+    pub session_id: String,
 }
 
 /// User info returned in auth responses

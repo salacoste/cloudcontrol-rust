@@ -1,6 +1,6 @@
-//! Admin routes (Story 14-2, Story 14-3)
+//! Admin routes (Story 14-2, Story 14-3, Story 14-5)
 //!
-//! Handles admin-only operations like role assignment and team management.
+//! Handles admin-only operations like role assignment, team management, and audit logs.
 
 use actix_web::{web, HttpResponse};
 use serde::{Deserialize, Serialize};
@@ -8,6 +8,7 @@ use std::sync::Arc;
 use std::str::FromStr;
 
 use crate::middleware::RequireAdmin;
+use crate::models::audit::{AuditQueryParams, CreateAuditEntry};
 use crate::models::team::{
     AddMemberRequest, AssignDeviceRequest, CreateTeamRequest, UpdateTeamRequest,
 };
@@ -106,9 +107,48 @@ pub async fn assign_role(
         });
     }
 
+    // Get the old role before updating (for audit logging - Story 14-5)
+    let old_role = match auth_service.get_user(&target_user_id).await {
+        Ok(Some(user)) => user.role,
+        Ok(None) => {
+            return HttpResponse::NotFound().json(AdminError {
+                status: "error".to_string(),
+                error: "CC-AUTH-107".to_string(),
+                message: "User not found".to_string(),
+                details: None,
+            });
+        }
+        Err(e) => {
+            tracing::error!("Failed to get user for role check: {}", e);
+            return HttpResponse::InternalServerError().json(AdminError {
+                status: "error".to_string(),
+                error: "CC-AUTH-500".to_string(),
+                message: "Failed to get user".to_string(),
+                details: None,
+            });
+        }
+    };
+
     // Update the user's role
     match auth_service.update_user_role(&target_user_id, &new_role.to_string()).await {
         Ok(user) => {
+            // Log role change (Story 14-5)
+            if let Some(audit_service) = &state.audit_service {
+                let entry = CreateAuditEntry::user_role_changed(
+                    &_admin.user.id,
+                    &_admin.user.email,
+                    &target_user_id,
+                    &old_role,
+                    &new_role.to_string(),
+                );
+                let audit_service = audit_service.clone();
+                actix_web::rt::spawn(async move {
+                    if let Err(e) = audit_service.log_event(&entry).await {
+                        tracing::warn!("Failed to log audit event: {}", e);
+                    }
+                });
+            }
+
             tracing::info!(
                 admin_user_id = % _admin.user.id,
                 target_user_id = % target_user_id,
@@ -209,6 +249,11 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
     .service(
         web::resource("/api/v1/admin/devices/{udid}/team")
             .route(web::put().to(assign_device_team))
+    )
+    // Audit log routes (Story 14-5)
+    .service(
+        web::resource("/api/v1/admin/audit-log")
+            .route(web::get().to(list_audit_log))
     );
 }
 
@@ -539,6 +584,50 @@ pub async fn assign_device_team(
             "data": response
         })),
         Err(e) => team_error_to_response(e),
+    }
+}
+
+// ============================================================================
+// Audit Log Routes (Story 14-5)
+// ============================================================================
+
+/// GET /api/v1/admin/audit-log
+///
+/// List audit log entries with optional filtering.
+/// Requires admin role.
+pub async fn list_audit_log(
+    _admin: RequireAdmin,
+    query: web::Query<AuditQueryParams>,
+    state: web::Data<AppState>,
+) -> HttpResponse {
+    let audit_service = match &state.audit_service {
+        Some(service) => service,
+        None => {
+            return HttpResponse::InternalServerError().json(AdminError {
+                status: "error".to_string(),
+                error: "CC-AUDIT-500".to_string(),
+                message: "Audit service not configured".to_string(),
+                details: None,
+            });
+        }
+    };
+
+    match audit_service.list_entries(&query.into_inner()).await {
+        Ok(response) => {
+            HttpResponse::Ok().json(serde_json::json!({
+                "status": "success",
+                "data": response
+            }))
+        }
+        Err(e) => {
+            tracing::error!("Failed to list audit entries: {}", e);
+            HttpResponse::InternalServerError().json(AdminError {
+                status: "error".to_string(),
+                error: "CC-AUDIT-500".to_string(),
+                message: "Failed to retrieve audit log".to_string(),
+                details: Some(e.to_string()),
+            })
+        }
     }
 }
 

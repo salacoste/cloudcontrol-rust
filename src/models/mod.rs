@@ -1,4 +1,5 @@
 pub mod api_response;
+pub mod audit;
 pub mod batch_report;
 pub mod device;
 pub mod file;

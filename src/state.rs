@@ -2,6 +2,7 @@ use crate::config::AppConfig;
 use crate::db::Database;
 use crate::pool::connection_pool::ConnectionPool;
 use crate::pool::screenshot_cache::ScreenshotCache;
+use crate::services::audit_service::AuditService;
 use crate::services::auth_service::AuthService;
 use crate::services::phone_service::PhoneService;
 use crate::services::recording_service::RecordingService;
@@ -124,6 +125,8 @@ pub struct AppState {
     pub auth_service: Option<Arc<AuthService>>,
     /// Team service for team management (Story 14-3)
     pub team_service: Option<Arc<TeamService>>,
+    /// Audit service for activity logging (Story 14-5)
+    pub audit_service: Option<Arc<AuditService>>,
     /// Whether API key authentication is enabled (Story 12-1)
     pub api_key_enabled: bool,
     /// Whether rate limiting is enabled (Story 12-2)
@@ -166,6 +169,9 @@ impl AppState {
         // Initialize team service (Story 14-3)
         let team_service = Some(Arc::new(TeamService::new(db.get_pool())));
 
+        // Initialize audit service (Story 14-5)
+        let audit_service = Some(Arc::new(AuditService::new(db.get_pool())));
+
         // Use configurable cache settings (Story 12-4)
         let device_info_max = config.cache.device_info_max;
         let device_info_ttl = Duration::from_secs(config.cache.device_info_ttl_secs);
@@ -192,6 +198,7 @@ impl AppState {
             ffmpeg_available: false, // Set at startup after async check
             auth_service,
             team_service,
+            audit_service,
             api_key_enabled,
             rate_limiting_enabled,
         }
