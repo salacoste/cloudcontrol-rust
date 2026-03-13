@@ -452,6 +452,18 @@ impl Database {
             .execute(&self.pool)
             .await?;
 
+        // Migration: Add session metadata columns to refresh_tokens (Story 14-4)
+        // These will silently fail if columns already exist, which is fine
+        let _ = sqlx::query("ALTER TABLE refresh_tokens ADD COLUMN last_used_at TEXT")
+            .execute(&self.pool)
+            .await;
+        let _ = sqlx::query("ALTER TABLE refresh_tokens ADD COLUMN user_agent TEXT")
+            .execute(&self.pool)
+            .await;
+        let _ = sqlx::query("ALTER TABLE refresh_tokens ADD COLUMN ip_address TEXT")
+            .execute(&self.pool)
+            .await;
+
         // Teams table (Story 14-3: Team/Organization Scoping)
         sqlx::query(
             r#"

@@ -6,5 +6,6 @@ pub mod openapi;
 pub mod product;
 pub mod provider;
 pub mod recording;
+pub mod session;
 pub mod team;
 pub mod user;

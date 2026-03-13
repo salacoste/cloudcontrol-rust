@@ -14,6 +14,7 @@ use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation}
 use sqlx::SqlitePool;
 
 use crate::config::AuthConfig;
+use crate::models::session::{RevokeAllSessionsResponse, Session, SessionInfo, SessionListResponse, SessionRevokeResponse};
 use crate::models::user::{
     generate_refresh_token, generate_refresh_token_id, generate_user_id, validate_password,
     AccessTokenClaims, AuthResponse, RefreshResponse, RefreshToken, RegisterResponse, User, UserInfo,
@@ -29,6 +30,7 @@ pub enum AuthError {
     EmailAlreadyExists,
     PasswordTooWeak(Vec<String>),
     UserNotFound,
+    SessionNotFound,
     DatabaseError(String),
     ConfigError(String),
     RateLimited,
@@ -46,6 +48,7 @@ impl std::fmt::Display for AuthError {
                 write!(f, "Password requirements not met: {}", errors.join(", "))
             }
             AuthError::UserNotFound => write!(f, "User not found"),
+            AuthError::SessionNotFound => write!(f, "Session not found"),
             AuthError::DatabaseError(msg) => write!(f, "Database error: {}", msg),
             AuthError::ConfigError(msg) => write!(f, "Configuration error: {}", msg),
             AuthError::RateLimited => write!(f, "Too many requests"),
@@ -101,7 +104,8 @@ pub struct JwtService {
     decoding_key: DecodingKey,
     access_token_expiry: Duration,
     refresh_token_expiry: Duration,
-    jwt_secret: String,
+    #[allow(dead_code)]
+    jwt_secret: String, // Reserved for future use (e.g., token rotation)
 }
 
 impl JwtService {
@@ -251,6 +255,8 @@ impl AuthService {
         &self,
         email: &str,
         password: &str,
+        user_agent: Option<&str>,
+        ip_address: Option<&str>,
     ) -> Result<AuthResponse, AuthError> {
         // Find user (includes team_id for Story 14-3)
         let user: Option<(String, String, String, Option<String>)> = sqlx::query_as(
@@ -286,11 +292,11 @@ impl AuthService {
         let now = Utc::now();
         let expires_at = now + self.jwt_service.refresh_token_expiry();
 
-        // Store refresh token
+        // Store refresh token (with optional metadata for session management - Story 14-4)
         sqlx::query(
             r#"
-            INSERT INTO refresh_tokens (id, user_id, token_hash, expires_at, created_at)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO refresh_tokens (id, user_id, token_hash, expires_at, created_at, user_agent, ip_address)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             "#,
         )
         .bind(&refresh_token_id)
@@ -298,6 +304,8 @@ impl AuthService {
         .bind(&refresh_token_hash)
         .bind(expires_at.to_rfc3339())
         .bind(now.to_rfc3339())
+        .bind(user_agent)
+        .bind(ip_address)
         .execute(&self.pool)
         .await
         .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
@@ -376,8 +384,10 @@ impl AuthService {
             None => return Err(AuthError::UserNotFound),
         };
 
-        // Revoke old token
-        sqlx::query("UPDATE refresh_tokens SET revoked = 1 WHERE id = ?")
+        // Update last_used_at and revoke old token (Story 14-4)
+        let now = Utc::now();
+        sqlx::query("UPDATE refresh_tokens SET revoked = 1, last_used_at = ? WHERE id = ?")
+            .bind(now.to_rfc3339())
             .bind(&token.id)
             .execute(&self.pool)
             .await
@@ -452,6 +462,100 @@ impl AuthService {
         tracing::info!("Logged out all sessions for user {}: {} tokens revoked", user_id, count);
 
         Ok(count)
+    }
+
+    // ========================================================================
+    // Session Management Methods (Story 14-4)
+    // ========================================================================
+
+    /// List active sessions for a user
+    /// Returns sessions that are not revoked and not expired
+    pub async fn list_sessions(&self, user_id: &str) -> Result<SessionListResponse, AuthError> {
+        let now = Utc::now().to_rfc3339();
+
+        let sessions: Vec<Session> = sqlx::query_as(
+            r#"
+            SELECT id, user_id, token_hash, expires_at, revoked, created_at,
+                   last_used_at, user_agent, ip_address
+            FROM refresh_tokens
+            WHERE user_id = ? AND revoked = 0 AND expires_at > ?
+            ORDER BY created_at DESC
+            "#,
+        )
+        .bind(user_id)
+        .bind(&now)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
+
+        let session_infos: Vec<SessionInfo> = sessions.into_iter().map(SessionInfo::from).collect();
+        let total = session_infos.len();
+
+        Ok(SessionListResponse {
+            sessions: session_infos,
+            total,
+        })
+    }
+
+    /// Revoke a specific session (must belong to the user)
+    /// Returns SessionRevokeResponse on success, AuthError::SessionNotFound if not found or not owned
+    pub async fn revoke_session(&self, user_id: &str, session_id: &str) -> Result<SessionRevokeResponse, AuthError> {
+        let result = sqlx::query(
+            r#"
+            UPDATE refresh_tokens
+            SET revoked = 1
+            WHERE id = ? AND user_id = ? AND revoked = 0
+            "#,
+        )
+        .bind(session_id)
+        .bind(user_id)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
+
+        if result.rows_affected() == 0 {
+            // Session not found, not owned by user, or already revoked
+            return Err(AuthError::SessionNotFound);
+        }
+
+        tracing::info!("Session revoked: {} for user {}", session_id, user_id);
+
+        Ok(SessionRevokeResponse {
+            message: "Session revoked successfully".to_string(),
+            session_id: session_id.to_string(),
+        })
+    }
+
+    /// Revoke all other sessions for a user, preserving the current session
+    /// Returns the count of revoked sessions
+    pub async fn revoke_all_other_sessions(
+        &self,
+        user_id: &str,
+        current_session_id: &str,
+    ) -> Result<RevokeAllSessionsResponse, AuthError> {
+        let result = sqlx::query(
+            r#"
+            UPDATE refresh_tokens
+            SET revoked = 1
+            WHERE user_id = ? AND id != ? AND revoked = 0
+            "#,
+        )
+        .bind(user_id)
+        .bind(current_session_id)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
+
+        let count = result.rows_affected();
+        tracing::info!(
+            "Revoked {} other sessions for user {} (preserved: {})",
+            count, user_id, current_session_id
+        );
+
+        Ok(RevokeAllSessionsResponse {
+            message: "All other sessions revoked".to_string(),
+            revoked_count: count,
+        })
     }
 
     /// Get user by ID
@@ -641,5 +745,92 @@ mod tests {
             refresh_token_expiry_days: 7,
         };
         assert!(JwtService::new(&config).is_err());
+    }
+
+    // ========================================
+    // Session Management Unit Tests (Story 14-4)
+    // ========================================
+
+    #[test]
+    fn test_session_info_excludes_token_hash() {
+        use crate::models::session::{Session, SessionInfo};
+
+        let session = Session {
+            id: "rt_test123".to_string(),
+            user_id: "user_abc".to_string(),
+            token_hash: "super_secret_hash".to_string(),
+            expires_at: "2026-03-20T10:30:00Z".to_string(),
+            revoked: 0,
+            created_at: "2026-03-13T10:30:00Z".to_string(),
+            last_used_at: None,
+            user_agent: None,
+            ip_address: None,
+        };
+
+        let info: SessionInfo = session.into();
+
+        // Verify token_hash is not exposed
+        let json = serde_json::to_string(&info).unwrap();
+        assert!(!json.contains("token_hash"));
+        assert!(!json.contains("super_secret"));
+        assert!(json.contains("rt_test123"));
+    }
+
+    #[test]
+    fn test_session_list_response_structure() {
+        use crate::models::session::{SessionInfo, SessionListResponse};
+
+        let response = SessionListResponse {
+            sessions: vec![
+                SessionInfo {
+                    id: "rt_1".to_string(),
+                    created_at: "2026-03-13T10:00:00Z".to_string(),
+                    expires_at: "2026-03-20T10:00:00Z".to_string(),
+                    last_used_at: Some("2026-03-14T12:00:00Z".to_string()),
+                    user_agent: Some("Mozilla/5.0".to_string()),
+                    ip_address: Some("192.168.1.1".to_string()),
+                },
+                SessionInfo {
+                    id: "rt_2".to_string(),
+                    created_at: "2026-03-12T10:00:00Z".to_string(),
+                    expires_at: "2026-03-19T10:00:00Z".to_string(),
+                    last_used_at: None,
+                    user_agent: None,
+                    ip_address: None,
+                },
+            ],
+            total: 2,
+        };
+
+        assert_eq!(response.sessions.len(), 2);
+        assert_eq!(response.total, 2);
+    }
+
+    #[test]
+    fn test_revoke_session_response() {
+        use crate::models::session::SessionRevokeResponse;
+
+        let response = SessionRevokeResponse {
+            message: "Session revoked successfully".to_string(),
+            session_id: "rt_abc123".to_string(),
+        };
+
+        let json = serde_json::to_string(&response).unwrap();
+        assert!(json.contains("Session revoked successfully"));
+        assert!(json.contains("rt_abc123"));
+    }
+
+    #[test]
+    fn test_revoke_all_sessions_response() {
+        use crate::models::session::RevokeAllSessionsResponse;
+
+        let response = RevokeAllSessionsResponse {
+            message: "All other sessions revoked".to_string(),
+            revoked_count: 5,
+        };
+
+        let json = serde_json::to_string(&response).unwrap();
+        assert!(json.contains("All other sessions revoked"));
+        assert!(json.contains("5"));
     }
 }

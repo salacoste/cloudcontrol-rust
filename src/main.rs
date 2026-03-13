@@ -414,6 +414,10 @@ async fn main() -> std::io::Result<()> {
             .route("/api/v1/auth/logout-all", web::post().to(routes::auth::logout_all))
             .route("/api/v1/auth/me", web::get().to(routes::auth::get_me))
             .route("/api/v1/auth/status", web::get().to(routes::auth::auth_status))
+            // ── Session Management API (Story 14-4) ──
+            .route("/api/v1/auth/sessions", web::get().to(routes::auth::list_sessions))
+            .route("/api/v1/auth/sessions/{session_id}", web::delete().to(routes::auth::revoke_session))
+            .route("/api/v1/auth/sessions", web::delete().to(routes::auth::revoke_all_other_sessions))
             // ── Admin API (Story 14-2: RBAC) ──
             .route("/api/v1/admin/users", web::get().to(routes::admin::list_users))
             .route("/api/v1/admin/users/{id}/role", web::post().to(routes::admin::assign_role))
