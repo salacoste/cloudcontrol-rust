@@ -92,8 +92,10 @@ pub async fn list_devices(
 ) -> HttpResponse {
     let phone_service = state.phone_service.clone();
 
-    // Get the user's team_id for filtering (if authenticated)
-    let user_team_id = auth.user.as_ref().and_then(|u| u.team_id.clone());
+    // Get the user's role and team_id for filtering (if authenticated)
+    let (user_role, user_team_id) = auth.user.as_ref()
+        .map(|u| (u.role.as_str(), u.team_id.clone()))
+        .unwrap_or(("", None));
 
     match phone_service.query_device_list_by_present().await {
         Ok(devices) => {
@@ -102,14 +104,25 @@ pub async fn list_devices(
                     // Get device team_id from the device data
                     let device_team_id = dev.get("team_id").and_then(|v| v.as_str()).map(|s| s.to_string());
 
-                    // Filter by team if user is authenticated and not an admin
-                    if let Some(ref_team_id) = &user_team_id {
-                        // Non-admin users only see devices in their team
-                        if device_team_id.as_ref() != Some(ref_team_id) {
-                            return None; // Skip this device
+                    // Team scoping logic (HIGH-1 fix: check role, not just team_id presence)
+                    // 1. Admin sees all devices
+                    // 2. Non-admin with team_id sees only devices in their team
+                    // 3. Non-admin without team_id sees no devices
+                    if user_role != "admin" {
+                        match &user_team_id {
+                            Some(ref_team_id) => {
+                                // Non-admin with team - only see devices in their team
+                                if device_team_id.as_ref() != Some(ref_team_id) {
+                                    return None; // Skip this device
+                                }
+                            }
+                            None => {
+                                // Non-admin without team - see no devices
+                                return None;
+                            }
                         }
                     }
-                    // If user is admin (no team_id) or not authenticated, show all devices
+                    // Admin sees all devices
 
                     let display = dev.get("display").cloned().unwrap_or(json!({"width": 1080, "height": 1920}));
                     Some(DeviceInfo {

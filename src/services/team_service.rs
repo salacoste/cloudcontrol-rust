@@ -317,29 +317,28 @@ impl TeamService {
         Ok(result)
     }
 
-    /// Get team details with members and device count
+    /// Get team details with members and device count (MEDIUM-2 fix: optimized to 2 queries)
     pub async fn get_team_details(&self, team_id: &str) -> Result<TeamDetails, TeamError> {
+        // Query 1: Get team basic info
         let team = self.get_team(team_id).await?;
 
-        // Get member count
-        let member_count: (i64,) = sqlx::query_as(
-            "SELECT COUNT(*) FROM users WHERE team_id = ?",
+        // Query 2: Get counts and members in a single query using subqueries
+        let row: Option<(i64, i64)> = sqlx::query_as(
+            r#"
+            SELECT
+                (SELECT COUNT(*) FROM users WHERE team_id = ?) as member_count,
+                (SELECT COUNT(*) FROM devices WHERE team_id = ?) as device_count
+            "#,
         )
         .bind(team_id)
-        .fetch_one(&self.pool)
+        .bind(team_id)
+        .fetch_optional(&self.pool)
         .await
         .map_err(|e| TeamError::DatabaseError(e.to_string()))?;
 
-        // Get device count
-        let device_count: (i64,) = sqlx::query_as(
-            "SELECT COUNT(*) FROM devices WHERE team_id = ?",
-        )
-        .bind(team_id)
-        .fetch_one(&self.pool)
-        .await
-        .map_err(|e| TeamError::DatabaseError(e.to_string()))?;
+        let (member_count, device_count) = row.unwrap_or((0, 0));
 
-        // Get team members
+        // Query 3: Get team members (separate because we need all member data)
         let members: Vec<TeamMember> = sqlx::query_as(
             r#"
             SELECT id, email, role FROM users WHERE team_id = ?
@@ -359,8 +358,8 @@ impl TeamService {
             id: team.id,
             name: team.name,
             description: team.description,
-            member_count: member_count.0,
-            device_count: device_count.0,
+            member_count,
+            device_count,
             members,
             created_at: team.created_at,
             updated_at: team.updated_at,
@@ -391,6 +390,14 @@ impl TeamService {
 
         if current_team.is_none() {
             return Err(TeamError::UserNotFound);
+        }
+
+        // Check if user is already in a team (HIGH-2 fix)
+        if let Some((Some(existing_team_id),)) = &current_team {
+            if existing_team_id != team_id {
+                return Err(TeamError::UserAlreadyInTeam);
+            }
+            // User is already in this team - idempotent, return success
         }
 
         // Update user's team

@@ -255,12 +255,12 @@ pub async fn create_test_device(app_state: &AppState, udid: &str) -> cloudcontro
     }
 }
 
-/// Assign a device to a team (stored in extra_data as team_id)
+/// Assign a device to a team (stored in team_id column - Story 14-3)
 pub async fn assign_device_to_team(app_state: &AppState, udid: &str, team_id: &str) {
     let pool = app_state.db.get_pool();
 
-    // Store team assignment in extra_data JSON field
-    sqlx::query("UPDATE devices SET extra_data = json_set(COALESCE(extra_data, '{}'), '$.team_id', ?) WHERE udid = ?")
+    // Update team_id column directly
+    sqlx::query("UPDATE devices SET team_id = ? WHERE udid = ?")
         .bind(team_id)
         .bind(udid)
         .execute(&pool)
