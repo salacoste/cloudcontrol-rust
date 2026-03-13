@@ -152,6 +152,9 @@ pub struct DeviceInfo {
     #[serde(rename = "lastSeen")]
     pub last_seen: Option<DateTime<Utc>>,
     pub tags: Vec<String>,
+    /// Team ID for team-scoped access control (Story 14-3)
+    #[serde(rename = "teamId", skip_serializing_if = "Option::is_none")]
+    pub team_id: Option<String>,
 }
 
 /// Response type for single device info endpoint

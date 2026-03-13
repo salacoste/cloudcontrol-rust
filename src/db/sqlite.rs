@@ -452,6 +452,66 @@ impl Database {
             .execute(&self.pool)
             .await?;
 
+        // Teams table (Story 14-3: Team/Organization Scoping)
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS teams (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL UNIQUE,
+                description TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_teams_name ON teams(name)")
+            .execute(&self.pool)
+            .await?;
+
+        // Migration: Add team_id column to devices table (Story 14-3)
+        // This will silently fail if column already exists, which is fine
+        let _ = sqlx::query("ALTER TABLE devices ADD COLUMN team_id TEXT REFERENCES teams(id)")
+            .execute(&self.pool)
+            .await;
+
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_devices_team ON devices(team_id)")
+            .execute(&self.pool)
+            .await?;
+
+        // Audit log table (Story 14-3: Team operations audit trail)
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS audit_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                action TEXT NOT NULL,
+                actor_id TEXT NOT NULL,
+                actor_email TEXT,
+                target_type TEXT NOT NULL,
+                target_id TEXT NOT NULL,
+                team_id TEXT,
+                details TEXT,
+                created_at TEXT NOT NULL
+            )
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_audit_log_actor ON audit_log(actor_id)")
+            .execute(&self.pool)
+            .await?;
+
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_audit_log_target ON audit_log(target_type, target_id)")
+            .execute(&self.pool)
+            .await?;
+
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_audit_log_team ON audit_log(team_id)")
+            .execute(&self.pool)
+            .await?;
+
         Ok(())
     }
 

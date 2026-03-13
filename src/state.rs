@@ -6,6 +6,7 @@ use crate::services::auth_service::AuthService;
 use crate::services::phone_service::PhoneService;
 use crate::services::recording_service::RecordingService;
 use crate::services::scrcpy_manager::ScrcpyManager;
+use crate::services::team_service::TeamService;
 use crate::services::video_service::VideoService;
 use dashmap::DashMap;
 use moka::future::Cache;
@@ -121,6 +122,8 @@ pub struct AppState {
     pub ffmpeg_available: bool,
     /// Authentication service for JWT-based auth (Story 14-1)
     pub auth_service: Option<Arc<AuthService>>,
+    /// Team service for team management (Story 14-3)
+    pub team_service: Option<Arc<TeamService>>,
     /// Whether API key authentication is enabled (Story 12-1)
     pub api_key_enabled: bool,
     /// Whether rate limiting is enabled (Story 12-2)
@@ -160,6 +163,9 @@ impl AppState {
             }
         });
 
+        // Initialize team service (Story 14-3)
+        let team_service = Some(Arc::new(TeamService::new(db.get_pool())));
+
         // Use configurable cache settings (Story 12-4)
         let device_info_max = config.cache.device_info_max;
         let device_info_ttl = Duration::from_secs(config.cache.device_info_ttl_secs);
@@ -185,6 +191,7 @@ impl AppState {
             video_service,
             ffmpeg_available: false, // Set at startup after async check
             auth_service,
+            team_service,
             api_key_enabled,
             rate_limiting_enabled,
         }

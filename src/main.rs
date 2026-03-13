@@ -414,6 +414,9 @@ async fn main() -> std::io::Result<()> {
             .route("/api/v1/auth/logout-all", web::post().to(routes::auth::logout_all))
             .route("/api/v1/auth/me", web::get().to(routes::auth::get_me))
             .route("/api/v1/auth/status", web::get().to(routes::auth::auth_status))
+            // ── Admin API (Story 14-2: RBAC) ──
+            .route("/api/v1/admin/users", web::get().to(routes::admin::list_users))
+            .route("/api/v1/admin/users/{id}/role", web::post().to(routes::admin::assign_role))
             // ── Provider Registry API ──
             .route("/api/v1/providers", web::get().to(routes::api_v1::list_providers))
             .route("/api/v1/providers", web::post().to(routes::api_v1::create_provider))

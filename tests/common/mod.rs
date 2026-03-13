@@ -129,3 +129,141 @@ pub async fn create_test_app_state_with_jwt_auth() -> (TempDir, AppState) {
     let state = AppState::new(db, config, pool, tera, "127.0.0.1".to_string());
     (tmp, state)
 }
+
+// ============================================================================
+// Team Test Helpers (Story 14-3)
+// ============================================================================
+
+use cloudcontrol::models::user::User;
+
+/// Create a test user in the database
+pub async fn create_test_user(app_state: &AppState, email: &str, password: &str) -> User {
+    let pool = app_state.db.get_pool();
+    let user_id = format!("user_{}", uuid::Uuid::new_v4().simple());
+    // Use a simple hash for tests - the actual auth service handles real hashing
+    let password_hash = format!("test_hash_{}", password);
+    let now = chrono::Utc::now().to_rfc3339();
+
+    sqlx::query(
+        r#"
+        INSERT INTO users (id, email, password_hash, role, created_at)
+        VALUES (?, ?, ?, 'agent', ?)
+        "#,
+    )
+    .bind(&user_id)
+    .bind(email)
+    .bind(&password_hash)
+    .bind(&now)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    User {
+        id: user_id,
+        email: email.to_string(),
+        password_hash,
+        role: "agent".to_string(),
+        team_id: None,
+        created_at: now,
+        last_login_at: None,
+    }
+}
+
+/// Add a user to a team
+pub async fn add_user_to_team(app_state: &AppState, user_id: &str, team_id: &str) {
+    let pool = app_state.db.get_pool();
+
+    sqlx::query("UPDATE users SET team_id = ? WHERE id = ?")
+        .bind(team_id)
+        .bind(user_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+}
+
+/// Promote a user to admin role (Story 14-3 test helper)
+pub async fn promote_user_to_admin(app_state: &AppState, user_id: &str) {
+    let pool = app_state.db.get_pool();
+
+    sqlx::query("UPDATE users SET role = 'admin' WHERE id = ?")
+        .bind(user_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+}
+
+/// Create a test device in the database
+pub async fn create_test_device(app_state: &AppState, udid: &str) -> cloudcontrol::models::device::Device {
+    let pool = app_state.db.get_pool();
+    let now = chrono::Utc::now().to_rfc3339();
+
+    sqlx::query(
+        r#"
+        INSERT INTO devices (udid, serial, ip, port, present, ready, using_device, is_server, is_mock, model, brand, version, sdk, display, memory, cpu, battery, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        "#,
+    )
+    .bind(udid)
+    .bind(udid)
+    .bind("192.168.1.100")
+    .bind(7912i64)
+    .bind(1i64)
+    .bind(1i64)
+    .bind(0i64)
+    .bind(0i64)
+    .bind(0i64)
+    .bind("TestModel")
+    .bind("TestBrand")
+    .bind("12")
+    .bind(31i64)
+    .bind(json!({"width": 1080, "height": 1920}).to_string())
+    .bind(json!({"total": 8192}).to_string())
+    .bind(json!({"cores": 8}).to_string())
+    .bind(json!({"level": 85}).to_string())
+    .bind(&now)
+    .bind(&now)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    cloudcontrol::models::device::Device {
+        udid: udid.to_string(),
+        serial: Some(udid.to_string()),
+        ip: Some("192.168.1.100".to_string()),
+        port: Some(7912),
+        present: true,
+        ready: true,
+        using_device: false,
+        is_server: false,
+        is_mock: false,
+        model: Some("TestModel".to_string()),
+        brand: Some("TestBrand".to_string()),
+        version: Some("12".to_string()),
+        sdk: Some(31),
+        display: Some(json!({"width": 1080, "height": 1920})),
+        memory: Some(json!({"total": 8192})),
+        cpu: Some(json!({"cores": 8})),
+        battery: Some(json!({"level": 85})),
+        owner: None,
+        provider: None,
+        agent_version: None,
+        hwaddr: None,
+        created_at: Some(now.clone()),
+        updated_at: Some(now),
+        update_time: None,
+        extra_data: None,
+    }
+}
+
+/// Assign a device to a team (stored in extra_data as team_id)
+pub async fn assign_device_to_team(app_state: &AppState, udid: &str, team_id: &str) {
+    let pool = app_state.db.get_pool();
+
+    // Store team assignment in extra_data JSON field
+    sqlx::query("UPDATE devices SET extra_data = json_set(COALESCE(extra_data, '{}'), '$.team_id', ?) WHERE udid = ?")
+        .bind(team_id)
+        .bind(udid)
+        .execute(&pool)
+        .await
+        .unwrap();
+}

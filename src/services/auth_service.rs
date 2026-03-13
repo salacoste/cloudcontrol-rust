@@ -16,7 +16,7 @@ use sqlx::SqlitePool;
 use crate::config::AuthConfig;
 use crate::models::user::{
     generate_refresh_token, generate_refresh_token_id, generate_user_id, validate_password,
-    AccessTokenClaims, AuthResponse, RefreshResponse, RefreshToken, RegisterResponse, UserInfo,
+    AccessTokenClaims, AuthResponse, RefreshResponse, RefreshToken, RegisterResponse, User, UserInfo,
 };
 
 /// Authentication errors
@@ -132,6 +132,7 @@ impl JwtService {
         user_id: &str,
         email: &str,
         role: &str,
+        team_id: Option<&str>,
     ) -> Result<(String, u64), AuthError> {
         let now = Utc::now();
         let exp = now + self.access_token_expiry;
@@ -140,6 +141,7 @@ impl JwtService {
             sub: user_id.to_string(),
             email: email.to_string(),
             role: role.to_string(),
+            team_id: team_id.map(|s| s.to_string()),
             exp: exp.timestamp(),
             iat: now.timestamp(),
         };
@@ -250,16 +252,16 @@ impl AuthService {
         email: &str,
         password: &str,
     ) -> Result<AuthResponse, AuthError> {
-        // Find user
-        let user: Option<(String, String, String)> = sqlx::query_as(
-            "SELECT id, password_hash, role FROM users WHERE email = ?",
+        // Find user (includes team_id for Story 14-3)
+        let user: Option<(String, String, String, Option<String>)> = sqlx::query_as(
+            "SELECT id, password_hash, role, team_id FROM users WHERE email = ?",
         )
         .bind(email)
         .fetch_optional(&self.pool)
         .await
         .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
 
-        let (user_id, password_hash, role) = match user {
+        let (user_id, password_hash, role, team_id) = match user {
             Some(u) => u,
             None => {
                 tracing::warn!("Login failed: user not found for email {}", email);
@@ -276,7 +278,7 @@ impl AuthService {
         // Generate tokens
         let (access_token, expires_in) =
             self.jwt_service
-                .generate_access_token(&user_id, email, &role)?;
+                .generate_access_token(&user_id, email, &role, team_id.as_deref())?;
 
         let refresh_token = generate_refresh_token();
         let refresh_token_hash = self.hash_refresh_token(&refresh_token);
@@ -319,6 +321,7 @@ impl AuthService {
                 id: user_id,
                 email: email.to_string(),
                 role,
+                team_id,
             },
         })
     }
@@ -359,16 +362,16 @@ impl AuthService {
             return Err(AuthError::TokenExpired);
         }
 
-        // Get user info
-        let user: Option<(String, String)> = sqlx::query_as(
-            "SELECT email, role FROM users WHERE id = ?",
+        // Get user info (includes team_id for Story 14-3)
+        let user: Option<(String, String, Option<String>)> = sqlx::query_as(
+            "SELECT email, role, team_id FROM users WHERE id = ?",
         )
         .bind(&token.user_id)
         .fetch_optional(&self.pool)
         .await
         .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
 
-        let (email, role) = match user {
+        let (email, role, team_id) = match user {
             Some(u) => u,
             None => return Err(AuthError::UserNotFound),
         };
@@ -385,6 +388,7 @@ impl AuthService {
             &token.user_id,
             &email,
             &role,
+            team_id.as_deref(),
         )?;
 
         let new_refresh_token = generate_refresh_token();
@@ -452,15 +456,15 @@ impl AuthService {
 
     /// Get user by ID
     pub async fn get_user(&self, user_id: &str) -> Result<Option<UserInfo>, AuthError> {
-        let user: Option<(String, String, String)> = sqlx::query_as(
-            "SELECT id, email, role FROM users WHERE id = ?",
+        let user: Option<(String, String, String, Option<String>)> = sqlx::query_as(
+            "SELECT id, email, role, team_id FROM users WHERE id = ?",
         )
         .bind(user_id)
         .fetch_optional(&self.pool)
         .await
         .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
 
-        Ok(user.map(|(id, email, role)| UserInfo { id, email, role }))
+        Ok(user.map(|(id, email, role, team_id)| UserInfo { id, email, role, team_id }))
     }
 
     /// Validate JWT access token
@@ -474,6 +478,74 @@ impl AuthService {
         let mut hasher = Sha256::new();
         hasher.update(token.as_bytes());
         format!("{:x}", hasher.finalize())
+    }
+
+    /// Update a user's role (admin only - Story 14-2)
+    pub async fn update_user_role(&self, user_id: &str, new_role: &str) -> Result<User, AuthError> {
+        let now = Utc::now().to_rfc3339();
+
+        let result = sqlx::query(
+            r#"
+            UPDATE users SET role = ?, last_login_at = ? WHERE id = ?
+            "#,
+        )
+        .bind(new_role)
+        .bind(&now)
+        .bind(user_id)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
+
+        if result.rows_affected() == 0 {
+            return Err(AuthError::UserNotFound);
+        }
+
+        // Fetch and return updated user
+        let user: Option<(String, String, String, Option<String>, String, Option<String>)> = sqlx::query_as(
+            "SELECT id, email, role, team_id, created_at, last_login_at FROM users WHERE id = ?",
+        )
+        .bind(user_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
+
+        match user {
+            Some((id, email, role, team_id, created_at, last_login_at)) => {
+                Ok(User {
+                    id,
+                    email,
+                    password_hash: String::new(), // Don't expose password hash
+                    role,
+                    team_id,
+                    created_at,
+                    last_login_at,
+                })
+            }
+            None => Err(AuthError::UserNotFound),
+        }
+    }
+
+    /// List all users (admin only - Story 14-2)
+    pub async fn list_users(&self) -> Result<Vec<User>, AuthError> {
+        let users: Vec<(String, String, String, Option<String>, String, Option<String>)> = sqlx::query_as(
+            "SELECT id, email, role, team_id, created_at, last_login_at FROM users ORDER BY created_at DESC",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
+
+        Ok(users
+            .into_iter()
+            .map(|(id, email, role, team_id, created_at, last_login_at)| User {
+                id,
+                email,
+                password_hash: String::new(),
+                role,
+                team_id,
+                created_at,
+                last_login_at,
+            })
+            .collect())
     }
 }
 
@@ -524,7 +596,7 @@ mod tests {
         let service = JwtService::new(&config).unwrap();
 
         let (token, expires_in) = service
-            .generate_access_token("user_123", "test@example.com", "agent")
+            .generate_access_token("user_123", "test@example.com", "agent", Some("team_abc"))
             .unwrap();
 
         assert!(!token.is_empty());

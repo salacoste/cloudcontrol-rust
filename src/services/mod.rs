@@ -8,3 +8,4 @@ pub mod wifi_discovery;
 pub mod recording_service;
 pub mod video_service;
 pub mod auth_service;
+pub mod team_service;

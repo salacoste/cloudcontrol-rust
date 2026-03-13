@@ -1,10 +1,11 @@
 use actix_web::body::EitherBody;
-use actix_web::dev::{Service, ServiceRequest, ServiceResponse, Transform};
+use actix_web::dev::{Service, ServiceRequest, ServiceResponse, Transform, Payload};
 use actix_web::http::Method;
-use actix_web::{Error, HttpResponse, HttpMessage};
+use actix_web::{Error, HttpResponse, HttpMessage, HttpRequest, FromRequest};
+use actix_web::error::ErrorForbidden;
 use crate::config::RateLimitConfig;
 use dashmap::DashMap;
-use futures::future::{ok, Either, Ready};
+use futures::future::{ok, Either, Ready, ready};
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
@@ -420,6 +421,155 @@ where
     }
 }
 
+// ═══════════════ RBAC EXTRACTORS (Story 14-2) ═══════════════
+
+use std::str::FromStr;
+use crate::models::user::{UserRole, Permission};
+
+/// Extractor that requires the user to have the Admin role.
+pub struct RequireAdmin {
+    pub user: UserInfo,
+}
+
+impl FromRequest for RequireAdmin {
+    type Error = Error;
+    type Future = Ready<Result<Self, Self::Error>>;
+
+    fn from_request(req: &HttpRequest, _: &mut Payload) -> Self::Future {
+        let user = req.extensions()
+            .get::<UserInfo>()
+            .cloned();
+
+        match user {
+            Some(user) if user.role == "admin" => {
+                ready(Ok(RequireAdmin { user }))
+            }
+            Some(_) => {
+                ready(Err(ErrorForbidden(serde_json::json!({
+                    "status": "error",
+                    "error": "CC-AUTH-104",
+                    "message": "Insufficient permissions",
+                    "details": "This action requires admin role"
+                }))))
+            }
+            None => {
+                ready(Err(ErrorForbidden(serde_json::json!({
+                    "status": "error",
+                    "error": "CC-AUTH-104",
+                    "message": "Insufficient permissions",
+                    "details": "Authentication required"
+                }))))
+            }
+        }
+    }
+}
+
+/// Extractor that requires any non-viewer role (Admin, Agent, or Renter).
+pub struct RequireAnyRole {
+    pub user: UserInfo,
+}
+
+impl FromRequest for RequireAnyRole {
+    type Error = Error;
+    type Future = Ready<Result<Self, Self::Error>>;
+
+    fn from_request(req: &HttpRequest, _: &mut Payload) -> Self::Future {
+        let user = req.extensions()
+            .get::<UserInfo>()
+            .cloned();
+
+        match user {
+            Some(user) => {
+                let role = UserRole::from_str(&user.role);
+                match role {
+                    Ok(UserRole::Viewer) => {
+                        ready(Err(ErrorForbidden(serde_json::json!({
+                            "status": "error",
+                            "error": "CC-AUTH-104",
+                            "message": "Insufficient permissions",
+                            "details": "Viewer role has read-only access"
+                        }))))
+                    }
+                    Ok(_) => ready(Ok(RequireAnyRole { user })),
+                    Err(_) => {
+                        ready(Err(ErrorForbidden(serde_json::json!({
+                            "status": "error",
+                            "error": "CC-AUTH-104",
+                            "message": "Insufficient permissions",
+                            "details": "Invalid user role"
+                        }))))
+                    }
+                }
+            }
+            None => {
+                ready(Err(ErrorForbidden(serde_json::json!({
+                    "status": "error",
+                    "error": "CC-AUTH-104",
+                    "message": "Insufficient permissions",
+                    "details": "Authentication required"
+                }))))
+            }
+        }
+    }
+}
+
+/// Optional authentication extractor (Story 14-3).
+/// Returns Some(user) if authenticated, None if not.
+/// Allows endpoints to work with or without authentication.
+pub struct OptionalAuth {
+    pub user: Option<UserInfo>,
+}
+
+impl FromRequest for OptionalAuth {
+    type Error = Error;
+    type Future = Ready<Result<Self, Self::Error>>;
+
+    fn from_request(req: &HttpRequest, _: &mut Payload) -> Self::Future {
+        let user = req.extensions().get::<UserInfo>().cloned();
+        ready(Ok(OptionalAuth { user }))
+    }
+}
+
+/// Check if the authenticated user has a specific permission.
+/// Returns the user info if authorized, or an error if not.
+pub fn check_permission(req: &HttpRequest, permission: Permission) -> Result<UserInfo, Error> {
+    let user = req.extensions()
+        .get::<UserInfo>()
+        .cloned()
+        .ok_or_else(|| ErrorForbidden(serde_json::json!({
+            "status": "error",
+            "error": "CC-AUTH-104",
+            "message": "Insufficient permissions",
+            "details": "Authentication required"
+        })))?;
+
+    let role = UserRole::from_str(&user.role)
+        .map_err(|_| ErrorForbidden(serde_json::json!({
+            "status": "error",
+            "error": "CC-AUTH-104",
+            "message": "Insufficient permissions",
+            "details": "Invalid user role"
+        })))?;
+
+    if role.has_permission(permission) {
+        Ok(user)
+    } else {
+        Err(ErrorForbidden(serde_json::json!({
+            "status": "error",
+            "error": "CC-AUTH-104",
+            "message": "Insufficient permissions",
+            "details": format!("This action requires {:?} permission", permission)
+        })))
+    }
+}
+
+/// Get the authenticated user's role from request extensions, if present.
+pub fn get_user_role(req: &HttpRequest) -> Option<UserRole> {
+    req.extensions()
+        .get::<UserInfo>()
+        .and_then(|u| UserRole::from_str(&u.role).ok())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -764,11 +914,12 @@ where
         // Validate token
         match auth_service.validate_token(&token) {
             Ok(claims) => {
-                // Inject user info into request
+                // Inject user info into request (includes team_id for Story 14-3)
                 let user_info = UserInfo {
                     id: claims.sub.clone(),
                     email: claims.email.clone(),
                     role: claims.role.clone(),
+                    team_id: claims.team_id.clone(),
                 };
                 req.extensions_mut().insert(user_info);
                 Either::Left(futures::future::FutureExt::map(

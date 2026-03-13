@@ -1,5 +1,6 @@
 use crate::device::adb::Adb;
 use crate::device::atx_client::AtxClient;
+use crate::middleware::{OptionalAuth, RequireAnyRole};
 use crate::models::api_response::{
     ApiResponse, BatchResponse, BatchResult, DeviceInfo, DeviceInfoResponse,
     ScreenshotResponse, TapRequest, SwipeRequest, InputRequest, KeyEventRequest,
@@ -84,32 +85,53 @@ fn parse_tags(v: &serde_json::Value) -> Vec<String> {
 // ═════════════════════════════════════════════════════════════════════════════
 
 /// GET /api/v1/devices - List all connected devices
-pub async fn list_devices(state: web::Data<AppState>) -> HttpResponse {
+/// Supports optional authentication for team-scoped filtering (Story 14-3)
+pub async fn list_devices(
+    auth: OptionalAuth,
+    state: web::Data<AppState>,
+) -> HttpResponse {
     let phone_service = state.phone_service.clone();
+
+    // Get the user's team_id for filtering (if authenticated)
+    let user_team_id = auth.user.as_ref().and_then(|u| u.team_id.clone());
 
     match phone_service.query_device_list_by_present().await {
         Ok(devices) => {
-            let device_infos: Vec<DeviceInfo> = devices.iter().map(|dev| {
-                let display = dev.get("display").cloned().unwrap_or(json!({"width": 1080, "height": 1920}));
-                DeviceInfo {
-                    udid: dev.get("udid").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
-                    model: dev.get("model").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
-                    android_version: dev.get("version").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
-                    battery: dev.get("battery").and_then(|v| v.as_i64()).unwrap_or(0) as i32,
-                    display: DisplayInfo {
-                        width: display.get("width").and_then(|v| v.as_u64()).unwrap_or(1080) as u32,
-                        height: display.get("height").and_then(|v| v.as_u64()).unwrap_or(1920) as u32,
-                    },
-                    serial: dev.get("serial").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
-                    ip: dev.get("ip").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
-                    port: dev.get("port").and_then(|v| v.as_i64()).unwrap_or(9008) as i64,
-                    status: dev.get("status").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
-                    last_seen: dev.get("last_seen").and_then(|v| {
-                        v.as_str().and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-                    }).map(|dt| chrono::DateTime::<chrono::Utc>::from(dt)),
-                    tags: parse_tags(dev.get("tags").unwrap_or(&json!([]))),
-                }
-            }).collect();
+            let device_infos: Vec<DeviceInfo> = devices.iter()
+                .filter_map(|dev| {
+                    // Get device team_id from the device data
+                    let device_team_id = dev.get("team_id").and_then(|v| v.as_str()).map(|s| s.to_string());
+
+                    // Filter by team if user is authenticated and not an admin
+                    if let Some(ref_team_id) = &user_team_id {
+                        // Non-admin users only see devices in their team
+                        if device_team_id.as_ref() != Some(ref_team_id) {
+                            return None; // Skip this device
+                        }
+                    }
+                    // If user is admin (no team_id) or not authenticated, show all devices
+
+                    let display = dev.get("display").cloned().unwrap_or(json!({"width": 1080, "height": 1920}));
+                    Some(DeviceInfo {
+                        udid: dev.get("udid").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
+                        model: dev.get("model").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
+                        android_version: dev.get("version").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
+                        battery: dev.get("battery").and_then(|v| v.as_i64()).unwrap_or(0) as i32,
+                        display: DisplayInfo {
+                            width: display.get("width").and_then(|v| v.as_u64()).unwrap_or(1080) as u32,
+                            height: display.get("height").and_then(|v| v.as_u64()).unwrap_or(1920) as u32,
+                        },
+                        serial: dev.get("serial").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
+                        ip: dev.get("ip").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
+                        port: dev.get("port").and_then(|v| v.as_i64()).unwrap_or(9008) as i64,
+                        status: dev.get("status").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
+                        last_seen: dev.get("last_seen").and_then(|v| {
+                            v.as_str().and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                        }).map(|dt| chrono::DateTime::<chrono::Utc>::from(dt)),
+                        tags: parse_tags(dev.get("tags").unwrap_or(&json!([]))),
+                        team_id: device_team_id,
+                    })
+                }).collect();
 
             success_response(json!({
                 "devices": device_infos,
@@ -147,6 +169,7 @@ pub async fn get_device(
                     v.as_str().and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
                 }).map(|dt| chrono::DateTime::<chrono::Utc>::from(dt)),
                 tags: parse_tags(device.get("tags").unwrap_or(&json!([]))),
+                team_id: device.get("team_id").and_then(|v| v.as_str()).map(|s| s.to_string()),
             };
             success_response(info)
         }
@@ -191,7 +214,9 @@ pub async fn get_screenshot(
 // ═════════════════════════════════════════════════════════════════════════════
 
 /// POST /api/v1/devices/{udid}/tap - Execute tap
+/// Requires: Agent, Admin, or Renter role (Viewer excluded - AC: Role-based device visibility)
 pub async fn tap(
+    _auth: RequireAnyRole,
     state: web::Data<AppState>,
     path: web::Path<String>,
     body: web::Json<TapRequest>,
@@ -211,7 +236,9 @@ pub async fn tap(
 }
 
 /// POST /api/v1/devices/{udid}/swipe - Execute swipe
+/// Requires: Agent, Admin, or Renter role (Viewer excluded - AC: Role-based device visibility)
 pub async fn swipe(
+    _auth: RequireAnyRole,
     state: web::Data<AppState>,
     path: web::Path<String>,
     body: web::Json<SwipeRequest>,
@@ -235,7 +262,9 @@ pub async fn swipe(
 }
 
 /// POST /api/v1/devices/{udid}/input - Text input
+/// Requires: Agent, Admin, or Renter role (Viewer excluded - AC: Role-based device visibility)
 pub async fn input(
+    _auth: RequireAnyRole,
     state: web::Data<AppState>,
     path: web::Path<String>,
     body: web::Json<InputRequest>,
@@ -259,7 +288,9 @@ pub async fn input(
 }
 
 /// POST /api/v1/devices/{udid}/keyevent - Key event
+/// Requires: Agent, Admin, or Renter role (Viewer excluded - AC: Role-based device visibility)
 pub async fn keyevent(
+    _auth: RequireAnyRole,
     state: web::Data<AppState>,
     path: web::Path<String>,
     body: web::Json<KeyEventRequest>,
@@ -300,7 +331,9 @@ pub async fn keyevent(
 // ═════════════════════════════════════════════════════════════════════════════
 
 /// POST /api/v1/batch/tap - Batch tap
+/// Requires: Agent, Admin, or Renter role (Viewer excluded - AC: Role-based device visibility)
 pub async fn batch_tap(
+    _auth: RequireAnyRole,
     state: web::Data<AppState>,
     body: web::Json<BatchTapRequest>,
 ) -> HttpResponse {
@@ -337,7 +370,9 @@ pub async fn batch_tap(
 }
 
 /// POST /api/v1/batch/swipe - Batch swipe
+/// Requires: Agent, Admin, or Renter role (Viewer excluded - AC: Role-based device visibility)
 pub async fn batch_swipe(
+    _auth: RequireAnyRole,
     state: web::Data<AppState>,
     body: web::Json<BatchSwipeRequest>,
 ) -> HttpResponse {
@@ -374,7 +409,9 @@ pub async fn batch_swipe(
 }
 
 /// POST /api/v1/batch/input - Batch input
+/// Requires: Agent, Admin, or Renter role (Viewer excluded - AC: Role-based device visibility)
 pub async fn batch_input(
+    _auth: RequireAnyRole,
     state: web::Data<AppState>,
     body: web::Json<BatchInputRequest>,
 ) -> HttpResponse {

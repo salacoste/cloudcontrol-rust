@@ -19,6 +19,65 @@ pub enum UserRole {
     Renter,  // Team-scoped device access (for Growth phase)
 }
 
+/// System permissions for RBAC (Story 14-2)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Permission {
+    // Device permissions
+    DeviceRead,
+    DeviceWrite,
+
+    // Profile permissions
+    ProfileRead,
+    ProfileWrite,
+    ProfileCheckout,
+
+    // Admin permissions
+    AdminUsers,
+    AdminAudit,
+    AdminTeams,
+}
+
+impl UserRole {
+    /// Returns all permissions granted to this role
+    pub fn permissions(&self) -> Vec<Permission> {
+        match self {
+            UserRole::Admin => vec![
+                Permission::DeviceRead,
+                Permission::DeviceWrite,
+                Permission::ProfileRead,
+                Permission::ProfileWrite,
+                Permission::ProfileCheckout,
+                Permission::AdminUsers,
+                Permission::AdminAudit,
+                Permission::AdminTeams,
+            ],
+            UserRole::Agent => vec![
+                Permission::DeviceRead,
+                Permission::DeviceWrite,
+                Permission::ProfileRead,
+                Permission::ProfileWrite,
+                Permission::ProfileCheckout,
+            ],
+            UserRole::Viewer => vec![
+                Permission::DeviceRead,
+                Permission::ProfileRead,
+            ],
+            UserRole::Renter => vec![
+                Permission::DeviceRead,
+                Permission::DeviceWrite,
+                Permission::ProfileRead,
+                Permission::ProfileWrite,
+                Permission::ProfileCheckout,
+            ],
+        }
+    }
+
+    /// Check if this role has a specific permission
+    pub fn has_permission(&self, permission: Permission) -> bool {
+        self.permissions().contains(&permission)
+    }
+}
+
 impl Default for UserRole {
     fn default() -> Self {
         Self::Agent
@@ -109,6 +168,9 @@ pub struct UserInfo {
     pub id: String,
     pub email: String,
     pub role: String,
+    /// Team ID for team-scoped access control (Story 14-3)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub team_id: Option<String>,
 }
 
 /// User registration response
@@ -136,6 +198,9 @@ pub struct AccessTokenClaims {
     pub sub: String,      // User ID
     pub email: String,
     pub role: String,
+    /// Team ID for team-scoped access control (Story 14-3)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub team_id: Option<String>,
     pub exp: i64,         // Expiration timestamp
     pub iat: i64,         // Issued at timestamp
 }
@@ -304,5 +369,69 @@ mod tests {
             password: "short".to_string(),
         };
         assert!(short_password.validate().is_err());
+    }
+
+    // ========================================
+    // RBAC Permission Tests (Story 14-2)
+    // ========================================
+
+    #[test]
+    fn test_admin_has_all_permissions() {
+        let admin = UserRole::Admin;
+        assert!(admin.has_permission(Permission::AdminUsers));
+        assert!(admin.has_permission(Permission::AdminAudit));
+        assert!(admin.has_permission(Permission::AdminTeams));
+        assert!(admin.has_permission(Permission::DeviceRead));
+        assert!(admin.has_permission(Permission::DeviceWrite));
+        assert!(admin.has_permission(Permission::ProfileRead));
+        assert!(admin.has_permission(Permission::ProfileWrite));
+        assert!(admin.has_permission(Permission::ProfileCheckout));
+        assert_eq!(admin.permissions().len(), 8);
+    }
+
+    #[test]
+    fn test_agent_has_device_and_profile_permissions() {
+        let agent = UserRole::Agent;
+        assert!(agent.has_permission(Permission::DeviceRead));
+        assert!(agent.has_permission(Permission::DeviceWrite));
+        assert!(agent.has_permission(Permission::ProfileRead));
+        assert!(agent.has_permission(Permission::ProfileWrite));
+        assert!(agent.has_permission(Permission::ProfileCheckout));
+        assert!(!agent.has_permission(Permission::AdminUsers));
+        assert!(!agent.has_permission(Permission::AdminAudit));
+        assert!(!agent.has_permission(Permission::AdminTeams));
+        assert_eq!(agent.permissions().len(), 5);
+    }
+
+    #[test]
+    fn test_viewer_read_only() {
+        let viewer = UserRole::Viewer;
+        assert!(viewer.has_permission(Permission::DeviceRead));
+        assert!(viewer.has_permission(Permission::ProfileRead));
+        assert!(!viewer.has_permission(Permission::DeviceWrite));
+        assert!(!viewer.has_permission(Permission::ProfileWrite));
+        assert!(!viewer.has_permission(Permission::ProfileCheckout));
+        assert!(!viewer.has_permission(Permission::AdminUsers));
+        assert_eq!(viewer.permissions().len(), 2);
+    }
+
+    #[test]
+    fn test_renter_has_write_permissions() {
+        let renter = UserRole::Renter;
+        assert!(renter.has_permission(Permission::DeviceRead));
+        assert!(renter.has_permission(Permission::DeviceWrite));
+        assert!(renter.has_permission(Permission::ProfileRead));
+        assert!(renter.has_permission(Permission::ProfileWrite));
+        assert!(renter.has_permission(Permission::ProfileCheckout));
+        assert!(!renter.has_permission(Permission::AdminUsers));
+        assert!(!renter.has_permission(Permission::AdminAudit));
+        assert!(!renter.has_permission(Permission::AdminTeams));
+        assert_eq!(renter.permissions().len(), 5);
+    }
+
+    #[test]
+    fn test_permission_equality() {
+        assert_eq!(Permission::DeviceRead, Permission::DeviceRead);
+        assert_ne!(Permission::DeviceRead, Permission::DeviceWrite);
     }
 }
